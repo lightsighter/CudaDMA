@@ -1,0 +1,7 @@
+#define SAXPY_KERNEL saxpy_cudaDMA_doublebuffer
+#define CTA_COUNT 14
+#define COMPUTE_THREADS_PER_CTA 32 * 8
+#define NUM_ITERS 2048
+#define DMA_THREADS_PER_LD 32 * 1
+#define BYTES_PER_DMA_THREAD 32
+#define DMA_SZ 4 * COMPUTE_THREADS_PER_CTA

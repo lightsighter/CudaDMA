@@ -50,10 +50,10 @@ dma_4ld( float4* g_idata, float4* g_odata, clock_t * timer_vals)
   }
   __syncthreads();
 
-  cudaDMASequential<64> 
+  cudaDMASequential<64,16> 
     dma0 (1, NUM_DMA_HB_THREADS, NUM_ELEMENTS,
 	  NUM_ELEMENTS);
-  cudaDMASequential<64>
+  cudaDMASequential<64,16>
     dma1 (2, NUM_DMA_HB_THREADS, NUM_ELEMENTS,
 	  NUM_ELEMENTS+NUM_DMA_HB_THREADS);
 

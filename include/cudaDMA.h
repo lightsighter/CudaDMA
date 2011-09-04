@@ -27,7 +27,7 @@ __device__ __forceinline__ void ptx_cudaDMA_barrier_nonblocking (const int name,
 }
 
 #define CUDADMA_BASE cudaDMA
-#define MAX_BYTES_OUTSTANDING_PER_THREAD 64
+#define MAX_BYTES_OUTSTANDING_PER_THREAD (4*ALIGNMENT) 
 #define MAX_LDS_OUTSTANDING_PER_THREAD 4
 #define CUDADMA_DMA_TID (threadIdx.x-dma_threadIdx_start)
 
@@ -170,8 +170,129 @@ class cudaDMA {
   __device__ __forceinline__ bool owns_this_thread() const { return is_dma_thread; }
 
   // Transfer primitives used by more than one subclass
-  template<bool DO_SYNC>
+  template<bool DO_SYNC, int ALIGNMENT>
     __device__ __forceinline__ void do_xfer( void * src_ptr, void * dst_ptr, unsigned int xfer_size) const
+  {
+     switch (ALIGNMENT)
+       {
+          case 4:
+	    {
+	      do_xfer_alignment_04<DO_SYNC>(src_ptr,dst_ptr,xfer_size);
+	      break;
+	    }
+          case 8:
+            {
+	      do_xfer_alignment_08<DO_SYNC>(src_ptr,dst_ptr,xfer_size);
+	      break;
+            }
+          case 16:
+            {
+	      do_xfer_alignment_16<DO_SYNC>(src_ptr,dst_ptr,xfer_size);
+	      break;
+	    }
+          default:
+            printf("Illegal alignment size (%d).  Must be one of (4,8,16).\n",ALIGNMENT);
+            break;
+       }
+  }
+
+  // Manage transfers only aligned to 4 bytes
+  template<bool DO_SYNC>
+   __device__ __forceinline__ void do_xfer_alignment_04( void * src_ptr, void * dst_ptr, unsigned int xfer_size) const
+  {
+    switch (xfer_size)
+      {
+        case 16:
+          {
+	    perform_four_xfers<float,float,DO_SYNC,true> (src_ptr,dst_ptr);
+	    break;
+          }
+	case 12:
+          {
+            perform_three_xfers<float,float,DO_SYNC> (src_ptr,dst_ptr);
+            break;
+          }
+	case 8:
+          {
+            perform_two_xfers<float,float,DO_SYNC> (src_ptr,dst_ptr);
+	    break;
+          }
+	case 4:
+          {
+	    perform_one_xfer<float,DO_SYNC> (src_ptr,dst_ptr);
+	    break;
+          }
+        case 0:
+	 {
+	   if (DO_SYNC) CUDADMA_BASE::wait_for_dma_start(); 
+	   break;
+	 }
+         default:
+           printf("Invalid xfer size (%u) for dma_tid = %d\n",xfer_size, CUDADMA_BASE::dma_tid);
+	   break;
+      }
+  }
+
+  // Manage transfers aligned to 8 byte boundary
+  template<bool DO_SYNC>
+   __device__ __forceinline__ void do_xfer_alignment_08( void * src_ptr, void * dst_ptr, unsigned int xfer_size) const
+  {
+    switch (xfer_size)
+      {
+        case 32:
+         {
+           perform_four_xfers<float2,float2,DO_SYNC,true> (src_ptr,dst_ptr);  
+           break;
+         }
+         case 28:
+         {
+           perform_four_xfers<float2,float,DO_SYNC,true> (src_ptr,dst_ptr);   
+           break;
+         }
+         case 24:
+         {
+           perform_three_xfers<float2,float2,DO_SYNC> (src_ptr,dst_ptr);  
+           break;
+         }
+         case 20:
+         {
+           perform_three_xfers<float2,float,DO_SYNC> (src_ptr,dst_ptr);  
+           break;
+         }
+         case 16:
+         {
+           perform_two_xfers<float2,float2,DO_SYNC> (src_ptr,dst_ptr); 
+           break;
+         }
+         case 12:
+         {
+           perform_two_xfers<float2,float,DO_SYNC> (src_ptr,dst_ptr); 
+           break;
+         }
+         case 8:
+         {
+           perform_one_xfer<float2,DO_SYNC> (src_ptr,dst_ptr); 
+           break;
+         }
+         case 4:
+         {
+           perform_one_xfer<float,DO_SYNC> (src_ptr,dst_ptr); 
+           break;
+         }
+         case 0:
+	 {
+	   if (DO_SYNC) CUDADMA_BASE::wait_for_dma_start(); 
+	   break;
+	 }
+         default:
+           printf("Invalid xfer size (%u) for dma_tid = %d\n",xfer_size, CUDADMA_BASE::dma_tid);
+	   break;
+      }
+  }
+
+  // Manage transfers aligned to 16 byte boundary
+  template<bool DO_SYNC>
+   __device__ __forceinline__ void do_xfer_alignment_16( void * src_ptr, void * dst_ptr, unsigned int xfer_size) const
   {
     switch (xfer_size) 
       {
@@ -315,28 +436,28 @@ class cudaDMA {
 #define CUDADMASEQUENTIAL_DMA_ITERS (BYTES_PER_THREAD-4)/MAX_BYTES_OUTSTANDING_PER_THREAD
 // All of these values below will be used as byte address offsets:
 #define CUDADMASEQUENTIAL_DMA_ITER_INC MAX_BYTES_OUTSTANDING_PER_THREAD*num_dma_threads
-#define CUDADMASEQUENTIAL_DMA1_ITER_OFFS 16*CUDADMA_DMA_TID
-#define CUDADMASEQUENTIAL_DMA2_ITER_OFFS 16*num_dma_threads+16*CUDADMA_DMA_TID
-#define CUDADMASEQUENTIAL_DMA3_ITER_OFFS 32*num_dma_threads+16*CUDADMA_DMA_TID
-#define CUDADMASEQUENTIAL_DMA4_ITER_OFFS 48*num_dma_threads+16*CUDADMA_DMA_TID
+#define CUDADMASEQUENTIAL_DMA1_ITER_OFFS 1*ALIGNMENT*CUDADMA_DMA_TID
+#define CUDADMASEQUENTIAL_DMA2_ITER_OFFS 1*ALIGNMENT*num_dma_threads+ALIGNMENT*CUDADMA_DMA_TID
+#define CUDADMASEQUENTIAL_DMA3_ITER_OFFS 2*ALIGNMENT*num_dma_threads+ALIGNMENT*CUDADMA_DMA_TID
+#define CUDADMASEQUENTIAL_DMA4_ITER_OFFS 3*ALIGNMENT*num_dma_threads+ALIGNMENT*CUDADMA_DMA_TID
 #define CUDADMASEQUENTIAL_DMA1_OFFS \
-  (((BYTES_PER_THREAD%64)<16)&&((BYTES_PER_THREAD%64)!=0)) ? \
-  (BYTES_PER_THREAD%16)*CUDADMA_DMA_TID : \
-  16*CUDADMA_DMA_TID
+  (((BYTES_PER_THREAD%MAX_BYTES_OUTSTANDING_PER_THREAD)<(1*ALIGNMENT))&&((BYTES_PER_THREAD%MAX_BYTES_OUTSTANDING_PER_THREAD)!=0)) ? \
+  (BYTES_PER_THREAD%ALIGNMENT)*CUDADMA_DMA_TID : \
+  ALIGNMENT*CUDADMA_DMA_TID
 #define CUDADMASEQUENTIAL_DMA2_OFFS \
-  (((BYTES_PER_THREAD%64)<32)&&((BYTES_PER_THREAD%64)!=0)) ?		\
-  (16*num_dma_threads+(BYTES_PER_THREAD%16)*CUDADMA_DMA_TID) :	\
-    (16*num_dma_threads+16*CUDADMA_DMA_TID)
+  (((BYTES_PER_THREAD%MAX_BYTES_OUTSTANDING_PER_THREAD)<(2*ALIGNMENT))&&((BYTES_PER_THREAD%MAX_BYTES_OUTSTANDING_PER_THREAD)!=0)) ?		\
+  (ALIGNMENT*num_dma_threads+(BYTES_PER_THREAD%ALIGNMENT)*CUDADMA_DMA_TID) :	\
+    (ALIGNMENT*num_dma_threads+ALIGNMENT*CUDADMA_DMA_TID)
 #define CUDADMASEQUENTIAL_DMA3_OFFS \
-  (((BYTES_PER_THREAD%64)<48)&&((BYTES_PER_THREAD%64)!=0)) ? \
-  (32*num_dma_threads+(BYTES_PER_THREAD%16)*CUDADMA_DMA_TID) : \
-    (32*num_dma_threads+16*CUDADMA_DMA_TID) 
+  (((BYTES_PER_THREAD%MAX_BYTES_OUTSTANDING_PER_THREAD)<(3*ALIGNMENT))&&((BYTES_PER_THREAD%MAX_BYTES_OUTSTANDING_PER_THREAD)!=0)) ? \
+  (2*ALIGNMENT*num_dma_threads+(BYTES_PER_THREAD%ALIGNMENT)*CUDADMA_DMA_TID) : \
+    (2*ALIGNMENT*num_dma_threads+ALIGNMENT*CUDADMA_DMA_TID) 
 #define CUDADMASEQUENTIAL_DMA4_OFFS \
-  ((BYTES_PER_THREAD%64)!=0) ? \
-  (48*num_dma_threads+(BYTES_PER_THREAD%16)*CUDADMA_DMA_TID) : \
-    (48*num_dma_threads+16*CUDADMA_DMA_TID)
+  ((BYTES_PER_THREAD%MAX_BYTES_OUTSTANDING_PER_THREAD)!=0) ? \
+  (3*ALIGNMENT*num_dma_threads+(BYTES_PER_THREAD%ALIGNMENT)*CUDADMA_DMA_TID) : \
+    (3*ALIGNMENT*num_dma_threads+ALIGNMENT*CUDADMA_DMA_TID)
 	      
-template <int BYTES_PER_THREAD>
+template <int BYTES_PER_THREAD,int ALIGNMENT>
 class cudaDMASequential : public CUDADMA_BASE {
 
  public:
@@ -417,8 +538,8 @@ class cudaDMASequential : public CUDADMA_BASE {
     {
 
       // Do a bunch of arithmetic based on total size of the xfer:
-      int num_vec4_loads = sz / (16*num_dma_threads);
-      int leftover_bytes = sz % (16*num_dma_threads);
+      int num_vec4_loads = sz / (ALIGNMENT*num_dma_threads);
+      int leftover_bytes = sz % (ALIGNMENT*num_dma_threads);
 
 #ifdef CUDADMA_DEBUG_ON
       if ((CUDADMA_DMA_TID==1)&&(CUDADMA_BASE::barrierID_full==4)&&(CUDADMA_BASE::is_dma_thread)) {
@@ -431,25 +552,26 @@ class cudaDMASequential : public CUDADMA_BASE {
       // Note, all threads are either active, partial, or inactive
       if (leftover_bytes==0) {
 	// Transfer is perfectly divisible by 16 bytes...only have to worry about not using all of BYTES_PER_THREAD
-	partial_thread_bytes = num_vec4_loads*16; 
+	partial_thread_bytes = num_vec4_loads*ALIGNMENT; 
 	is_partial_thread = (partial_thread_bytes!=BYTES_PER_THREAD);
 	is_active_thread = (partial_thread_bytes==BYTES_PER_THREAD);
       } else {
 	// Threads below partial thread dma_tid will do 16-byte (or BYTES_PER_THREAD leftover) xfers, above should be inactive
-	int max_thread_bytes = min(16,BYTES_PER_THREAD-(num_vec4_loads*16));
+	int max_thread_bytes = min(ALIGNMENT,BYTES_PER_THREAD-(num_vec4_loads*ALIGNMENT));
 	if (leftover_bytes>=(max_thread_bytes*(CUDADMA_DMA_TID+1))) {
 	  // Below:  Do 16-byte xfers
-	  partial_thread_bytes = num_vec4_loads*16 + max_thread_bytes;
+	  partial_thread_bytes = num_vec4_loads*ALIGNMENT + max_thread_bytes;
 	  is_partial_thread = (partial_thread_bytes!=BYTES_PER_THREAD);
 	  is_active_thread = (partial_thread_bytes==BYTES_PER_THREAD);
 	} else if (leftover_bytes<(max_thread_bytes*(CUDADMA_DMA_TID+1))) {
 	  // Above:  Do 0-byte xfers
 	  is_active_thread = false;
-	  partial_thread_bytes = num_vec4_loads*16;
+	  partial_thread_bytes = (num_vec4_loads-(dma_iters*MAX_LDS_OUTSTANDING_PER_THREAD))*ALIGNMENT;
 	  is_partial_thread = (num_vec4_loads!=0);
 	} else {
 	  // Less than 16 bytes on this thread
-	  partial_thread_bytes = (num_vec4_loads*16) + (leftover_bytes%max_thread_bytes);
+	  partial_thread_bytes = (num_vec4_loads-(dma_iters*MAX_LDS_OUTSTANDING_PER_THREAD))*ALIGNMENT;
+	  //partial_thread_bytes = (num_vec4_loads*ALIGNMENT) + (leftover_bytes%max_thread_bytes);
 	  is_partial_thread = true;
 	  is_active_thread = false;
 	}
@@ -485,14 +607,42 @@ class cudaDMASequential : public CUDADMA_BASE {
     // Slightly less optimized case
     char * src_temp = (char *)src_ptr;
     char * dst_temp = (char *)dst_ptr;
-    for(int i = 0; i < dma_iters ; i++) {
-      CUDADMA_BASE::template perform_four_xfers<float4,float4,false,false> (src_temp,dst_temp);
-      src_temp += dma_iter_inc;
-      dst_temp += dma_iter_inc;
-    }
+    switch (ALIGNMENT)
+      {
+	case 4:
+	  {
+	    for(int i = 0; i < dma_iters; i++) {
+	      CUDADMA_BASE::template perform_four_xfers<float,float,false,false> (src_temp,dst_temp);
+	      src_temp += dma_iter_inc;
+	      dst_temp += dma_iter_inc;
+	    }
+	    break;
+	  }
+        case 8:
+          {
+            for(int i = 0; i < dma_iters ; i++) {
+	      CUDADMA_BASE::template perform_four_xfers<float2,float2,false,false> (src_temp,dst_temp);
+	      src_temp += dma_iter_inc;
+	      dst_temp += dma_iter_inc;
+	    }
+	    break;
+          }
+        case 16:
+          {
+            for(int i = 0; i < dma_iters ; i++) {
+              CUDADMA_BASE::template perform_four_xfers<float4,float4,false,false> (src_temp,dst_temp);
+              src_temp += dma_iter_inc;
+              dst_temp += dma_iter_inc;
+            }
+            break;
+          }
+        default:
+          printf("ALIGNMENT must be one of (4,8,16)\n");
+          break;
+      }
     // Handle the leftovers
     if (all_threads_active) {
-      CUDADMA_BASE::template do_xfer<CUDADMASEQUENTIAL_DMA_ITERS==0> ( src_temp, dst_temp, 
+      CUDADMA_BASE::template do_xfer<CUDADMASEQUENTIAL_DMA_ITERS==0, ALIGNMENT> ( src_temp, dst_temp, 
 						(this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ? 
 						(this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) : 
 						MAX_BYTES_OUTSTANDING_PER_THREAD );
@@ -513,7 +663,7 @@ class cudaDMASequential : public CUDADMA_BASE {
 	       (this_thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0));
       }
 #endif
-      CUDADMA_BASE::template do_xfer<false> ( src_temp, dst_temp, 
+      CUDADMA_BASE::template do_xfer<false, ALIGNMENT> ( src_temp, dst_temp, 
 		       (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ? 
 		       (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) : 
 		       (this_thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0));
@@ -556,7 +706,7 @@ class cudaDMASequential : public CUDADMA_BASE {
   (48*num_dma_threads+((x)%16)*CUDADMA_DMA_TID) : \
     (48*num_dma_threads+16*CUDADMA_DMA_TID)
 
-template <int BYTES_PER_THREAD>
+template <int BYTES_PER_THREAD, int ALIGNMENT>
 class cudaDMAStrided : public CUDADMA_BASE {
 
  public:
@@ -784,12 +934,12 @@ class cudaDMAStrided : public CUDADMA_BASE {
       }
       // Handle the col leftovers
       if (all_threads_active) {
-        CUDADMA_BASE::template do_xfer<false> ( src_temp, dst_temp, 
+        CUDADMA_BASE::template do_xfer<false, ALIGNMENT> ( src_temp, dst_temp, 
 	  					(this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ? 
 						(this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) : 
 						MAX_BYTES_OUTSTANDING_PER_THREAD );
       } else {
-        CUDADMA_BASE::template do_xfer<false> ( src_temp, dst_temp, 
+        CUDADMA_BASE::template do_xfer<false, ALIGNMENT> ( src_temp, dst_temp, 
 		       (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ? 
 		       (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) : 
 		       (this_thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0));
@@ -818,6 +968,7 @@ class cudaDMAStrided : public CUDADMA_BASE {
 };
     
 #define MAX_SMALL_ELEMENTS_SIZE 64
+template<int ALIGNMENT>
 class cudaDMAStridedSmallElements : public CUDADMA_BASE {
 
   const int bytes_per_thread_per_el; //Bytes loaded per thread within one 'element'/'row'
@@ -868,7 +1019,7 @@ class cudaDMAStridedSmallElements : public CUDADMA_BASE {
     dma_src_row_iter_inc (el_src_stride*num_dma_threads),
     dma_dst_row_iter_inc (el_dst_stride*num_dma_threads)
     {
-      is_active_row_leftover_thread = dma_tid < el_cnt % num_dma_threads;
+      is_active_row_leftover_thread = CUDADMA_BASE::dma_tid < el_cnt % num_dma_threads;
     }
 
   // DMA-thread Data Transfer Functions:
@@ -886,13 +1037,13 @@ class cudaDMAStridedSmallElements : public CUDADMA_BASE {
     char * src_temp = (char *)src_ptr;
     char * dst_temp = (char *)dst_ptr;
     for(int i = 0; i < dma_row_iters; i++) {
-      do_xfer<false> ( src_temp, dst_temp, bytes_per_thread_per_el );
+      CUDADMA_BASE::template do_xfer<false, ALIGNMENT> ( src_temp, dst_temp, bytes_per_thread_per_el );
       src_temp += dma_src_row_iter_inc;
       dst_temp += dma_dst_row_iter_inc;
     }
-    if (all_threads_active && !dma_row_iters) do_xfer<true> ( src_temp, dst_temp, bytes_per_thread_per_el );
-    else if (all_threads_active && dma_row_iters) do_xfer<false> ( src_temp, dst_temp, bytes_per_thread_per_el );
-    else if (is_active_row_leftover_thread) do_xfer<false> ( src_temp, dst_temp, bytes_per_thread_per_el );
+    if (all_threads_active && !dma_row_iters) CUDADMA_BASE::template do_xfer<true, ALIGNMENT> ( src_temp, dst_temp, bytes_per_thread_per_el );
+    else if (all_threads_active && dma_row_iters) CUDADMA_BASE::template do_xfer<false, ALIGNMENT> ( src_temp, dst_temp, bytes_per_thread_per_el );
+    else if (is_active_row_leftover_thread) CUDADMA_BASE::template do_xfer<false, ALIGNMENT> ( src_temp, dst_temp, bytes_per_thread_per_el );
 
     CUDADMA_BASE::finish_async_dma();
   }
@@ -909,6 +1060,7 @@ class cudaDMAStridedSmallElements : public CUDADMA_BASE {
 
 };
     
+template<int ALIGNMENT>
 class cudaDMACustom : public CUDADMA_BASE {
 
   __device__ cudaDMACustom (const int dmaID,

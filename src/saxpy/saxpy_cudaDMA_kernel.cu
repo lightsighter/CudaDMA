@@ -271,10 +271,10 @@ __global__ void saxpy_cudaDMA ( float* y, float* x, float a, clock_t * timer_val
   __shared__ float sdata_x0 [COMPUTE_THREADS_PER_CTA];
   __shared__ float sdata_y0 [COMPUTE_THREADS_PER_CTA];
 
-  cudaDMASequential<BYTES_PER_DMA_THREAD>
+  cudaDMASequential<BYTES_PER_DMA_THREAD,16>
     dma_ld_x_0 (1, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
 		COMPUTE_THREADS_PER_CTA, DMA_SZ);
-  cudaDMASequential<BYTES_PER_DMA_THREAD>
+  cudaDMASequential<BYTES_PER_DMA_THREAD,16>
     dma_ld_y_0 (2, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
 		COMPUTE_THREADS_PER_CTA + DMA_THREADS_PER_LD, DMA_SZ);
 
@@ -333,16 +333,16 @@ __global__ void saxpy_cudaDMA_doublebuffer ( float* y, float* x, float a, clock_
   __shared__ float sdata_y0 [COMPUTE_THREADS_PER_CTA];
   __shared__ float sdata_y1 [COMPUTE_THREADS_PER_CTA];
 
-  cudaDMASequential<BYTES_PER_DMA_THREAD>
+  cudaDMASequential<BYTES_PER_DMA_THREAD,16>
     dma_ld_x_0 (1, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
 		COMPUTE_THREADS_PER_CTA);
-  cudaDMASequential<BYTES_PER_DMA_THREAD>
+  cudaDMASequential<BYTES_PER_DMA_THREAD,16>
     dma_ld_y_0 (2, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
 		COMPUTE_THREADS_PER_CTA + DMA_THREADS_PER_LD);
-  cudaDMASequential<BYTES_PER_DMA_THREAD>
+  cudaDMASequential<BYTES_PER_DMA_THREAD,16>
     dma_ld_x_1 (3, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
 		COMPUTE_THREADS_PER_CTA + 2*DMA_THREADS_PER_LD);
-  cudaDMASequential<BYTES_PER_DMA_THREAD>
+  cudaDMASequential<BYTES_PER_DMA_THREAD,16>
     dma_ld_y_1 (4, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
 		COMPUTE_THREADS_PER_CTA + 3*DMA_THREADS_PER_LD);
 

@@ -558,19 +558,24 @@ class cudaDMASequential : public CUDADMA_BASE {
       } else {
 	// Threads below partial thread dma_tid will do 16-byte (or BYTES_PER_THREAD leftover) xfers, above should be inactive
 	int max_thread_bytes = min(ALIGNMENT,BYTES_PER_THREAD-(num_vec4_loads*ALIGNMENT));
+#ifdef CUDADMA_DEBUG_ON
+	if ((CUDADMA_DMA_TID==1)&&(CUDADMA_BASE::barrierID_full==4)&&(CUDADMA_BASE::is_dma_thread)) {
+	  printf("max_thread_bytes = %d\n",max_thread_bytes);
+	}
+#endif
 	if (leftover_bytes>=(max_thread_bytes*(CUDADMA_DMA_TID+1))) {
 	  // Below:  Do 16-byte xfers
 	  partial_thread_bytes = num_vec4_loads*ALIGNMENT + max_thread_bytes;
 	  is_partial_thread = (partial_thread_bytes!=BYTES_PER_THREAD);
 	  is_active_thread = (partial_thread_bytes==BYTES_PER_THREAD);
-	} else if (leftover_bytes<(max_thread_bytes*(CUDADMA_DMA_TID+1))) {
-	  // Above:  Do 0-byte xfers
+	} else if (leftover_bytes<(max_thread_bytes*CUDADMA_DMA_TID)) {
+	  // Above:  Do 0-byte xfers on last vec_load, do max_bytes_per_thread xfer on all previous loads
 	  is_active_thread = false;
 	  partial_thread_bytes = (num_vec4_loads-(dma_iters*MAX_LDS_OUTSTANDING_PER_THREAD))*ALIGNMENT;
 	  is_partial_thread = (num_vec4_loads!=0);
 	} else {
-	  // Less than 16 bytes on this thread
-	  partial_thread_bytes = (num_vec4_loads-(dma_iters*MAX_LDS_OUTSTANDING_PER_THREAD))*ALIGNMENT;
+	  // Do less than max_thread_bytes on last vec_load in this thread, do max_bytes_per_thread xfer on all previous loads
+	  partial_thread_bytes = (num_vec4_loads-(dma_iters*MAX_LDS_OUTSTANDING_PER_THREAD))*ALIGNMENT + (leftover_bytes%max_thread_bytes);
 	  //partial_thread_bytes = (num_vec4_loads*ALIGNMENT) + (leftover_bytes%max_thread_bytes);
 	  is_partial_thread = true;
 	  is_active_thread = false;
@@ -595,9 +600,11 @@ class cudaDMASequential : public CUDADMA_BASE {
   {
 
 #ifdef CUDADMA_DEBUG_ON
+    /*
       if ((CUDADMA_BASE::dma_tid==0)&&(CUDADMA_BASE::barrierID_full==4)&&(CUDADMA_BASE::is_dma_thread)) {
-	printf("dma_tid = %d\nnum_dma_threads = %d\nbytes_per_thread = %d\ndma_iters = %d\ndma_iter_inc = %d\ndma1_offs = %lu\ndma2_offs = %lu\ndma3_offs = %lu\ndma4_offs = %lu\ndma1_iter_offs = %lu\ndma2_iter_offs = %lu\ndma3_iter_offs = %lu\ndma4_iter_offs = %lu\n", CUDADMA_BASE::dma_tid, dma_iter_inc/MAX_BYTES_OUTSTANDING_PER_THREAD, BYTES_PER_THREAD, dma_iters, dma_iter_inc, dma1_offs, dma2_offs, dma3_offs, dma4_offs, dma1_iter_offs, dma2_iter_offs, dma3_iter_offs, dma4_iter_offs);
+	printf("dma_tid = %d\nnum_dma_threads = %d\nbytes_per_thread = %d\ndma_iters = %d\ndma_iter_inc = %d\ndma1_src_offs = %lu\ndma2_offs = %lu\ndma3_offs = %lu\ndma4_offs = %lu\ndma1_iter_offs = %lu\ndma2_iter_offs = %lu\ndma3_iter_offs = %lu\ndma4_iter_offs = %lu\n", CUDADMA_BASE::dma_tid, dma_iter_inc/MAX_BYTES_OUTSTANDING_PER_THREAD, BYTES_PER_THREAD, dma_iters, dma_iter_inc, dma1_src_offs, dma2_offs, dma3_offs, dma4_offs, dma1_iter_offs, dma2_iter_offs, dma3_iter_offs, dma4_iter_offs);
       }
+    */
 #endif
 
     int this_thread_bytes = is_active_thread ? BYTES_PER_THREAD : is_partial_thread ? partial_thread_bytes : 0;
@@ -649,14 +656,14 @@ class cudaDMASequential : public CUDADMA_BASE {
     } else {
 #ifdef CUDADMA_DEBUG_ON
       if ((CUDADMA_BASE::dma_tid==1)&&(CUDADMA_BASE::barrierID_full==4)&&(CUDADMA_BASE::is_dma_thread)) {
-	printf("src1 addr = %x\n",((char *)src_temp + dma1_offs));
-	printf("src2 addr = %x\n",((char *)src_temp + dma2_offs));
-	printf("src3 addr = %x\n",((char *)src_temp + dma3_offs));
-	printf("src4 addr = %x\n",((char *)src_temp + dma4_offs));
-	printf("dst1 addr = %x\n",((char *)dst_temp + dma1_offs));
-	printf("dst2 addr = %x\n",((char *)dst_temp + dma2_offs));
-	printf("dst3 addr = %x\n",((char *)dst_temp + dma3_offs));
-	printf("dst4 addr = %x\n",((char *)dst_temp + dma4_offs));
+	printf("src1 addr = %x\n",((char *)src_temp + dma1_src_offs));
+	printf("src2 addr = %x\n",((char *)src_temp + dma2_src_offs));
+	printf("src3 addr = %x\n",((char *)src_temp + dma3_src_offs));
+	printf("src4 addr = %x\n",((char *)src_temp + dma4_src_offs));
+	printf("dst1 addr = %x\n",((char *)dst_temp + dma1_dst_offs));
+	printf("dst2 addr = %x\n",((char *)dst_temp + dma2_dst_offs));
+	printf("dst3 addr = %x\n",((char *)dst_temp + dma3_dst_offs));
+	printf("dst4 addr = %x\n",((char *)dst_temp + dma4_dst_offs));
 	printf("bytes = %d\n",
 	       (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ? 
 	       (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) : 
@@ -912,9 +919,11 @@ class cudaDMAStrided : public CUDADMA_BASE {
   __device__ void execute_dma ( void * src_ptr, void * dst_ptr) const
   {
 #ifdef CUDADMA_DEBUG_ON
+    /*
       if ((dma_tid==0)&&(CUDADMA_BASE::barrierID_full==4)&&(CUDADMA_BASE::is_dma_thread)) {
 	printf("dma_tid = %d\nnum_dma_threads = %d\nbytes_per_thread_per_el = %d\ndma_col_iters = %d\ndma_col_iter_inc = %d\ndma1_offs = %lu\ndma2_offs = %lu\ndma3_offs = %lu\ndma4_offs = %lu\ndma1_iter_offs = %lu\ndma2_iter_offs = %lu\ndma3_iter_offs = %lu\ndma4_iter_offs = %lu\n", CUDADMA_BASE::dma_tid, dma_col_iter_inc/MAX_BYTES_OUTSTANDING_PER_THREAD, bytes_per_thread_per_el, dma_col_iters, dma_col_iter_inc, dma1_offs, dma2_offs, dma3_offs, dma4_offs, dma1_iter_offs, dma2_iter_offs, dma3_iter_offs, dma4_iter_offs);
       }
+    */
 #endif
     int this_thread_bytes = is_active_thread ? bytes_per_thread_per_el : is_partial_thread ? partial_thread_bytes : 0;
     //if ((dma_col_iters>0) || (dma_row_iters>1) || (!all_threads_active)) {

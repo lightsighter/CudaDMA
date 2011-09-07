@@ -457,7 +457,7 @@ class cudaDMA {
   (3*ALIGNMENT*num_dma_threads+(BYTES_PER_THREAD%ALIGNMENT)*CUDADMA_DMA_TID) : \
     (3*ALIGNMENT*num_dma_threads+ALIGNMENT*CUDADMA_DMA_TID)
 	      
-template <int BYTES_PER_THREAD,int ALIGNMENT>
+template <int BYTES_PER_THREAD, int ALIGNMENT>
 class cudaDMASequential : public CUDADMA_BASE {
 
  public:
@@ -505,7 +505,7 @@ class cudaDMASequential : public CUDADMA_BASE {
       partial_thread_bytes = 0;
     }
 
-  // Constructor for when (sz != BYTES_PER_THREAD * num_dma_threads)
+  // Constructor for when (sz <= BYTES_PER_THREAD * num_dma_threads)
   __device__ cudaDMASequential (const int dmaID,
 				const int num_dma_threads,
 				const int num_compute_threads,
@@ -1058,6 +1058,91 @@ class cudaDMAStridedSmallElements : public CUDADMA_BASE {
     CUDADMA_BASE::finish_async_dma();
   }
 
+};
+
+// The idea behind this version of cudaDMAStrided is to check to see how many warps are
+// required per element and then figure out how many elements can be loaded at a time.
+#define MAX_WARPS_PER_ELMT ((el_sz+(warpSize*MAX_BYTES_OUTSTANDING_PER_THREAD-1))/(warpSize*MAX_BYTES_OUTSTANDING_PER_THREAD))
+#define ELMT_PER_STEP ((num_dma_threads/warpSize+MAX_WARPS_PER_ELMT-1)/MAX_WARPS_PER_ELMT)
+#define ELMT_ID ((CUDADMA_DMA_TID/warpSize)/MAX_WARPS_PER_ELMT)
+// For a given elmt, figure out how many warps there are loading it
+// If there is just one element, then all the warps will load it
+// Otherwise all elements get MAX_WARPS_PER_ELMT except the last one which gets the left over warps
+#define WARPS_PER_EL (ELMT_PER_STEP == 1 ? (num_dma_threads/warpSize) : (ELMT_ID < (ELMT_PER_STEP-1) ? MAX_WARPS_PER_ELMT : (num_dma_threads/warpSize) - (ELMT_PER_STEP-1)*MAX_WARPS_PER_ELMT))
+#define CUDADMA_WARP_TID (threadIdx.x - (dma_threadIdx_start + (ELMT_ID*MAX_WARPS_PER_ELMT*warpSize)))
+#define CUDADMASTRIDED_DMA1_ITER_OFFS (ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA2_ITER_OFFS (1*ALIGNMENT*WARPS_PER_EL*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA3_ITER_OFFS (2*ALIGNMENT*WARPS_PER_EL*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA4_ITER_OFFS (3*ALIGNMENT*WARPS_PER_EL*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA1_OFFS(x)	\
+    ((((x)%MAX_BYTES_OUTSTANDING_PER_THREAD)<1*ALIGNMENT) && ((x)%MAX_BYTES_OUTSTANDING_PER_THREAD!=0) ?	\
+    ((x)%ALIGNMENT)*CUDADMA_WARP_TID : ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA2_OFFS(x)	\
+    ((((x)%MAX_BYTES_OUTSTANDING_PER_THREAD)<2*ALIGNMENT) && ((x)%MAX_BYTES_OUTSTANDING_PER_THREAD!=0) ? 	\
+    ((1*ALIGNMENT*WARPS_PER_EL*warpSize + ((x)%ALIGNMENT))*CUDADMA_WARP_TID) : 1*ALIGNMENT*WARPS_PER_EL*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA3_OFFS(x)	\
+    ((((x)%MAX_BYTES_OUTSTANDING_PER_THREAD)<3*ALIGNMENT) && ((x)%MAX_BYTES_OUTSTANDING_PER_THREAD!=0) ?	\
+    ((2*ALIGNMENT*WARPS_PER_EL*warpSize + ((x)%ALIGNMENT))*CUDADMA_WARP_TID) : 2*ALIGNMENT*WARPS_PER_EL*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA4_OFFS(x)	\
+    (((x)%MAX_BYTES_OUTSTANDING_PER_THREAD!=0) ?	\
+    ((3*ALIGNMENT*WARPS_PER_EL*warpSize + ((x)%ALIGNMENT))*CUDADMA_WARP_TID) : 3*ALIGNMENT*WARPS_PER_EL*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
+ 
+template<int ALIGNMENT>
+class cudaDMAStrided : public CUDADMA_BASE
+{
+private:
+	const int el_sz;
+	const int el_id;
+	const int dma_row_iters;
+	const int dma_col_iters;
+	const int dma_row_iter_inc;
+	const int dma_col_iter_inc;
+	const bool all_threads_active;
+	bool is_active_thread;
+	bool is_partial_thread;
+	int partial_thread_bytes;
+public:
+  __device__ cudaDMAStrided (const int dmaID,
+			     const int num_dma_threads,
+			     const int num_compute_threads,
+			     const int dma_threadIdx_start,
+			     const int el_sz,
+			     const int el_cnt,
+			     const int el_stride)	
+	: CUDADMA_BASE (dmaID,
+			num_dma_threads,
+			num_compute_threads,
+			dma_threadIdx_start,
+			CUDADMASTRIDED_DMA1_ITER_OFFS,
+			CUDADMASTRIDED_DMA2_ITER_OFFS,
+			CUDADMASTRIDED_DMA3_ITER_OFFS,
+			CUDADMASTRIDED_DMA4_ITER_OFFS,
+			CUDADMASTRIDED_DMA1_OFFS,
+			CUDADMASTRIDED_DMA2_OFFS,
+			CUDADMASTRIDED_DMA3_OFFS,
+			CUDADMASTRIDED_DMA4_OFFS,			
+			CUDADMASTRIDED_DMA1_ITER_OFFS,
+			CUDADMASTRIDED_DMA2_ITER_OFFS,
+			CUDADMASTRIDED_DMA3_ITER_OFFS,
+			CUDADMASTRIDED_DMA4_ITER_OFFS,
+			CUDADMASTRIDED_DMA1_OFFS,
+			CUDADMASTRIDED_DMA2_OFFS,
+			CUDADMASTRIDED_DMA3_OFFS,
+			CUDADMASTRIDED_DMA4_OFFS),
+		el_sz (el_sz),	
+		// For a given DMA warp figure out which element it is responsible for
+		el_id (ELMT_ID),
+		
+
+  // Public DMA-thread Synchronization Functions
+  __device__ __forceinline__ void wait_for_dma_start() const
+  {
+    CUDADMA_BASE::wait_for_dma_start();
+  }
+  __device__ __forceinline__ void finish_async_dma() const
+  {
+    CUDADMA_BASE::finish_async_dma();
+  }
 };
     
 template<int ALIGNMENT>

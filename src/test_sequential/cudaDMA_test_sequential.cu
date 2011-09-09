@@ -214,6 +214,42 @@ dma_ld_corner( float *idata, float *odata, int num_floats,
 }
 
 template<int MAX_BYTES_PER_THREAD, int ALIGNMENT, int ALIGN_OFFSET>
+__global__ void __launch_bounds__(1024,1)
+dma_ld_special( float *idata, float *odata, int num_floats,
+		int num_compute_threads, int num_dma_threads_per_ld)
+{
+	extern __shared__ float buffer[];
+	
+	cudaDMASequential<MAX_BYTES_PER_THREAD, ALIGNMENT>
+	  dma0 (1, num_dma_threads_per_ld, num_compute_threads,
+		num_compute_threads);
+
+	if (dma0.owns_this_thread())
+	{
+		float *base_ptr = &(idata[ALIGN_OFFSET]);
+		dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+	}
+	else
+	{
+		dma0.start_async_dma();
+		dma0.wait_for_dma_finish();
+		int iters = num_floats/num_compute_threads;
+		int index = threadIdx.x;
+		for (int i=0; i<iters; i++)
+		{
+			float res = buffer[index+ALIGN_OFFSET];
+			odata[index] = res;
+			index += num_compute_threads;
+		}
+		if (index < num_floats)
+		{
+			float res = buffer[index+ALIGN_OFFSET];
+			odata[index] = res;
+		}
+	}
+}
+
+template<int MAX_BYTES_PER_THREAD, int ALIGNMENT, int ALIGN_OFFSET, bool SPECIAL>
 __host__ bool run_corner_experiment(int num_floats, int dma_warps)
 {
 	int shared_buffer_size = (num_floats+ALIGN_OFFSET)*sizeof(float);
@@ -247,7 +283,10 @@ __host__ bool run_corner_experiment(int num_floats, int dma_warps)
 	//fflush(stdout);
 
 	// run the experiment
-	dma_ld_corner<MAX_BYTES_PER_THREAD,ALIGNMENT,ALIGN_OFFSET><<<1,total_threads,shared_buffer_size,0>>>(d_idata, d_odata, num_floats, num_compute_warps*WARP_SIZE, dma_warps*WARP_SIZE);	
+	if (!SPECIAL)
+		dma_ld_corner<MAX_BYTES_PER_THREAD,ALIGNMENT,ALIGN_OFFSET><<<1,total_threads,shared_buffer_size,0>>>(d_idata, d_odata, num_floats, num_compute_warps*WARP_SIZE, dma_warps*WARP_SIZE);	
+	else
+		dma_ld_special<MAX_BYTES_PER_THREAD,ALIGNMENT,ALIGN_OFFSET><<<1,total_threads,shared_buffer_size,0>>>(d_idata, d_odata, num_floats, num_compute_warps*WARP_SIZE, dma_warps*WARP_SIZE);
 	CUDA_SAFE_CALL( cudaThreadSynchronize());
 
 	CUDA_SAFE_CALL( cudaMemcpy( h_odata, d_odata, num_floats*sizeof(float), cudaMemcpyDeviceToHost));
@@ -280,210 +319,223 @@ __host__ bool run_corner_experiment(int num_floats, int dma_warps)
 	return pass;
 }
 
-template<int MAX_BYTES_PER_THREAD, int ALIGNMENT, int ALIGN_OFFSET>
+template<int MAX_BYTES_PER_THREAD, int ALIGNMENT, int ALIGN_OFFSET, bool SPECIAL>
 __host__ void run_all_corner_experiments(bool &success, int max_dma_warps)
 {
-	printf("Running all corner experiments for max bytes per thread %d - alignment %d - offset %d...\n",MAX_BYTES_PER_THREAD,ALIGNMENT,ALIGN_OFFSET);
-	for (int dma_warps=1; dma_warps <= max_dma_warps; dma_warps++)
+	if (!SPECIAL)
 	{
-		int max_total_floats = MAX_BYTES_PER_THREAD*dma_warps*WARP_SIZE/sizeof(float);
-		for (int num_floats=4; num_floats < max_total_floats; num_floats++)
+		printf("Running all corner experiments for max bytes per thread %d - alignment %d - offset %d...\n",MAX_BYTES_PER_THREAD,ALIGNMENT,ALIGN_OFFSET);
+		for (int dma_warps=1; dma_warps <= max_dma_warps; dma_warps++)
 		{
-			success = success && run_corner_experiment<MAX_BYTES_PER_THREAD,ALIGNMENT,ALIGN_OFFSET>(num_floats, dma_warps);
-		}	
+			int max_total_floats = MAX_BYTES_PER_THREAD*dma_warps*WARP_SIZE/sizeof(float);
+			for (int num_floats=4; num_floats < max_total_floats; num_floats++)
+			{
+				success = success && run_corner_experiment<MAX_BYTES_PER_THREAD,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(num_floats, dma_warps);
+			}	
+		}
+	}
+	else
+	{
+		// The case for handling the special constructor for CudaDMASequential
+		printf("Running special experiments for max bytes per thread %d - alignment %d - offset %d...\n",MAX_BYTES_PER_THREAD,ALIGNMENT,ALIGN_OFFSET);
+		for (int dma_warps=1; dma_warps <= max_dma_warps; dma_warps++)
+		{
+			int num_floats = MAX_BYTES_PER_THREAD*dma_warps*WARP_SIZE/sizeof(float);
+			success = success && run_corner_experiment<MAX_BYTES_PER_THREAD,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(num_floats, dma_warps);
+		}
 	}
 }
 
-template<int ALIGNMENT, int ALIGN_OFFSET>
+template<int ALIGNMENT, int ALIGN_OFFSET, bool SPECIAL>
 __host__ void run_all_alignment_tests(bool &success, int max_dma_warps)
 {
 	{
 		const int offset = 0;
 		// Handle some strange cases in case max bytes per thread is less than alignment
-		if ((4+offset)>=ALIGNMENT) run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		if ((8+offset)>=ALIGNMENT) run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		if ((12+offset)>=ALIGNMENT)run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		if ((4+offset)>=ALIGNMENT) run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		if ((8+offset)>=ALIGNMENT) run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		if ((12+offset)>=ALIGNMENT)run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 32;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 64;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 96;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 128;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 160;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 192;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 224;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 256;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 288;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 320;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 352;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 384;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 416;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 448;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 480;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 	{
 		const int offset = 512;
-		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
-		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET,SPECIAL>(success,max_dma_warps);
 	}
 }
 
@@ -606,19 +658,40 @@ int main( int argc, char** argv)
     bool corner04_2 = true;
     bool corner04_3 = true;
 
+    bool special16_0 = true;
+    bool special08_0 = true;
+    bool special08_2 = true;
+    bool special04_0 = true;
+    bool special04_1 = true;
+    bool special04_2 = true;
+    bool special04_3 = true;
+
     CUDA_SAFE_CALL(cudaSetDevice( 0 ));
+#if 0
     // Corner case tests
     {
-	run_all_alignment_tests<16,0>(corner16_0,16);
-	run_all_alignment_tests<8,0>(corner08_0,16);
-	run_all_alignment_tests<8,2>(corner08_2,16);
-	run_all_alignment_tests<4,0>(corner04_0,16);
-	run_all_alignment_tests<4,1>(corner04_1,16);
-	run_all_alignment_tests<4,2>(corner04_2,16);
-	run_all_alignment_tests<4,3>(corner04_3,16);	
+	run_all_alignment_tests<16,0,false>(corner16_0,16);
+	run_all_alignment_tests<8,0,false>(corner08_0,16);
+	run_all_alignment_tests<8,2,false>(corner08_2,16);
+	run_all_alignment_tests<4,0,false>(corner04_0,16);
+	run_all_alignment_tests<4,1,false>(corner04_1,16);
+	run_all_alignment_tests<4,2,false>(corner04_2,16);
+	run_all_alignment_tests<4,3,false>(corner04_3,16);	
 	//run_corner_experiment<28,16,0>(133,1);
     } 
+#endif
+    // Special constructor case tests
+    {
+	run_all_alignment_tests<16,0,true>(special16_0,16);
+	run_all_alignment_tests<8,0,true>(special08_0,16);
+	run_all_alignment_tests<8,2,true>(special08_2,16);
+	run_all_alignment_tests<4,0,true>(special04_0,16);
+	run_all_alignment_tests<4,1,true>(special04_1,16);
+	run_all_alignment_tests<4,2,true>(special04_2,16);
+	run_all_alignment_tests<4,3,true>(special04_3,16);	
+    }
 
+#if 0
     // Test the float4 cases
     {
 	  for (int elems = 1; elems <= 32; elems++)
@@ -2249,6 +2322,7 @@ int main( int argc, char** argv)
 		}
 	}
     }
+#endif
 
     printf("-------------------------------------------------\n");
     printf("Summary:\n");
@@ -2271,6 +2345,14 @@ int main( int argc, char** argv)
     printf("\tCorner Case Alignment04-Offset1: %s\n",(corner04_1?"SUCCESS":"FAILURE"));
     printf("\tCorner Case Alignment04-Offset2: %s\n",(corner04_2?"SUCCESS":"FAILURE"));
     printf("\tCorner Case Alignment04-Offset3: %s\n",(corner04_3?"SUCCESS":"FAILURE"));
+    printf("\n");
+    printf("\tSpecial Constructor Alignment16-Offset0: %s\n",(special16_0?"SUCCESS":"FAILURE"));
+    printf("\tSpecial Constructor Alignment08-Offset0: %s\n",(special08_0?"SUCCESS":"FAILURE"));
+    printf("\tSpecial Constructor Alignment08-Offset2: %s\n",(special08_2?"SUCCESS":"FAILURE"));
+    printf("\tSpecial Constructor Alignment04-Offset0: %s\n",(special04_0?"SUCCESS":"FAILURE"));
+    printf("\tSpecial Constructor Alignment04-Offset1: %s\n",(special04_1?"SUCCESS":"FAILURE"));
+    printf("\tSpecial Constructor Alignment04-Offset2: %s\n",(special04_2?"SUCCESS":"FAILURE"));
+    printf("\tSpecial Constructor Alignment04-Offset3: %s\n",(special04_3?"SUCCESS":"FAILURE"));
     printf("\n\tTotal Experiments - %ld\n",total_experiments);
     return 0;
 }

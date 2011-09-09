@@ -21,7 +21,7 @@
 #pragma once
 
 #include <stdio.h>
-#define CUDADMA_DEBUG_ON 1
+//#define CUDADMA_DEBUG_ON 1
 #define PRINT_ERRORS 1
 #include "../../include/cudaDMA.h"
 #include "params.h"
@@ -347,7 +347,7 @@ __global__ void saxpy_cudaDMA_brucek ( float* y, float* x, float a, clock_t * ti
     // Preamble:
     dma_ld_x_0.start_async_dma();
     dma_ld_y_0.start_async_dma();
-    for (i = 0; i < NUM_ITERS-1; ++i) {
+    for (i = 0; i < ITERS_PER_COMPUTE_THREAD-1; ++i) {
       dma_ld_x_0.wait_for_dma_finish();
       tmp_x = sdata_x0[tid];
       dma_ld_x_0.start_async_dma();
@@ -366,13 +366,13 @@ __global__ void saxpy_cudaDMA_brucek ( float* y, float* x, float a, clock_t * ti
     y[idx] = a * tmp_x + tmp_y;
 
   } else if (dma_ld_x_0.owns_this_thread()) {
-    for (unsigned int j = 0; j < NUM_ITERS; ++j) {
+    for (unsigned int j = 0; j < ITERS_PER_COMPUTE_THREAD; j++) {
       // idx is a pointer to the base of the chunk of memory to copy
       unsigned int idx = j * COMPUTE_THREADS_PER_CTA * CTA_COUNT + blockIdx.x * COMPUTE_THREADS_PER_CTA;
       dma_ld_x_0.execute_dma( &x[idx], sdata_x0 );
     }
   } else if (dma_ld_y_0.owns_this_thread()) {
-    for (unsigned int j = 0; j < NUM_ITERS; ++j) {
+    for (unsigned int j = 0; j < ITERS_PER_COMPUTE_THREAD; j++) {
       unsigned int idx = j * COMPUTE_THREADS_PER_CTA * CTA_COUNT + blockIdx.x * COMPUTE_THREADS_PER_CTA;
       dma_ld_y_0.execute_dma( &y[idx], sdata_y0 );
     }

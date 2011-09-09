@@ -192,18 +192,33 @@ bool run_all_experiments(int max_element_size, int max_element_count,
 		// Get the initial source stride from the element size with the given alignment
 		const int min_stride = element_size + (element_size%(ALIGNMENT/sizeof(float)) ? 
 					((ALIGNMENT/sizeof(float))-(element_size%(ALIGNMENT/sizeof(float)))) : 0);
-		// Make each of the strides range from min_stride to 2*min_stride
-		// This should cover all of the cases for a given element size
-		// Anything larger is modulo equivalent to a smaller stride
-		for (int src_stride=min_stride; src_stride <= (2*min_stride); src_stride += (ALIGNMENT/sizeof(float)))
-		  for (int dst_stride=min_stride; dst_stride <= (2*min_stride); dst_stride += (ALIGNMENT/sizeof(float)))
-		  {
+		// Let's only check full stride cases if element_size is divisible by 31 so we can
+		// make the search space a little sparser and also test lots of potential strides
+		// on weird alignment offsets
+		if ((element_size%31)==0)
+		{
+			// Make each of the strides range from min_stride to 2*min_stride
+			// This should cover all of the cases for a given element size
+			// Anything larger is modulo equivalent to a smaller stride
+			for (int src_stride=min_stride; src_stride <= (2*min_stride); src_stride += (ALIGNMENT/sizeof(float)))
+			  for (int dst_stride=min_stride; dst_stride <= (2*min_stride); dst_stride += (ALIGNMENT/sizeof(float)))
+			  {
+				for (int dma_warps=1; dma_warps <= max_dma_warps; dma_warps++)
+				{
+					pass = pass && run_experiment<ALIGNMENT,ALIGN_OFFSET>(element_size, 
+							element_count,src_stride,dst_stride,dma_warps);
+				}
+			  }
+		}
+		else
+		{
+			// Just test the variable number of dma_warps
 			for (int dma_warps=1; dma_warps <= max_dma_warps; dma_warps++)
 			{
-				pass = pass && run_experiment<ALIGNMENT,ALIGN_OFFSET>(element_size, 
-						element_count,src_stride,dst_stride,dma_warps);
+				pass = pass && run_experiment<ALIGNMENT,ALIGN_OFFSET>(element_size,
+						element_count,min_stride,min_stride,dma_warps);
 			}
-		  }
+		}
 	  }
 	}
 	return pass;

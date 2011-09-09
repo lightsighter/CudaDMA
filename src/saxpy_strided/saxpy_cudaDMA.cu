@@ -104,7 +104,7 @@ main( int argc, char** argv)
   if(COMPUTE_THREADS_PER_CTA > DMA_SZ_IN_FS) printf("WARNING: Compute threads on first iter will overrun shared buffer if idx not checked\n");
   printf ("Launching kernel with:\n");
   printf ("   %d total CTAs per SM\n",(CTA_COUNT/MY_GPU_SM_COUNT));
-  if ( (SAXPY_KERNEL==saxpy_cudaDMA) || (SAXPY_KERNEL==saxpy_cudaDMA_doublebuffer) ) {
+  if ( (SAXPY_KERNEL==saxpy_cudaDMA) || (SAXPY_KERNEL==saxpy_cudaDMA_doublebuffer || (SAXPY_KERNEL==saxpy_cudaDMA_brucek)) ) {
     printf ("   %d total threads per CTA (%d compute, %d dma)\n",THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA,DMA_THREADS_PER_CTA);
     printf ("   %d bytes per DMA thread\n",BYTES_PER_DMA_THREAD);
     printf ("   %d byte DMA transfer\n",DMA_SZ);

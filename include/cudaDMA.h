@@ -473,7 +473,7 @@ class cudaDMASequential : public CUDADMA_BASE {
   // DMA Addressing variables
   const unsigned int dma_iters;
   const unsigned int dma_iter_inc;  // Precomputed offset for next copy iteration
-  bool all_threads_active; // If true, then we know that all threads are guaranteed to be active (needed for sync/divergence functionality guarantee)
+  const bool all_threads_active; // If true, then we know that all threads are guaranteed to be active (needed for sync/divergence functionality guarantee)
   bool is_active_thread;   // If true, then all of BYTES_PER_THREAD will be transferred for this thread
   bool is_partial_thread;  // If true, then only some of BYTES_PER_THREAD will be transferred for this thread
   int partial_thread_bytes;
@@ -506,7 +506,7 @@ class cudaDMASequential : public CUDADMA_BASE {
                    ),
     dma_iters (CUDADMASEQUENTIAL_DMA_ITERS),
     dma_iter_inc (CUDADMASEQUENTIAL_DMA_ITER_INC),
-    all_threads_active (true)
+    all_threads_active (((BYTES_PER_THREAD*num_dma_threads)%(ALIGNMENT*num_dma_threads))==0)
     {
       is_active_thread = true;
       is_partial_thread = false;
@@ -541,8 +541,9 @@ class cudaDMASequential : public CUDADMA_BASE {
                     CUDADMASEQUENTIAL_DMA4_OFFS
                    ),
     dma_iters ( (sz-4)/(MAX_BYTES_OUTSTANDING_PER_THREAD*num_dma_threads) ),
-    dma_iter_inc (CUDADMASEQUENTIAL_DMA_ITER_INC)
+    dma_iter_inc (CUDADMASEQUENTIAL_DMA_ITER_INC),
     //all_threads_active (sz==(BYTES_PER_THREAD*num_dma_threads))
+    all_threads_active ((sz % (ALIGNMENT*num_dma_threads))==0)
     {
 
       // Do a bunch of arithmetic based on total size of the xfer:
@@ -559,13 +560,11 @@ class cudaDMASequential : public CUDADMA_BASE {
       // After computing leftover_bytes, figure out the cutoff point in dma_tid:
       // Note, all threads are either active, partial, or inactive
       if (leftover_bytes==0) {
-	all_threads_active = true;
 	// Transfer is perfectly divisible by 16 bytes...only have to worry about not using all of BYTES_PER_THREAD
 	partial_thread_bytes = num_vec4_loads*ALIGNMENT; 
 	is_partial_thread = (partial_thread_bytes!=BYTES_PER_THREAD);
 	is_active_thread = (partial_thread_bytes==BYTES_PER_THREAD);
       } else {
-	all_threads_active = false;
 	// Threads below partial thread dma_tid will do 16-byte (or BYTES_PER_THREAD leftover) xfers, above should be inactive
 	//int max_thread_bytes = min(ALIGNMENT,BYTES_PER_THREAD-(num_vec4_loads*ALIGNMENT));
 	int max_thread_bytes = ALIGNMENT;
@@ -1127,6 +1126,7 @@ private:
 	int thread_bytes;
 public:
   // Constructor for when dst_stride is the same as el_sz
+  // This also requires that el_sz%ALIGNMENT==0
   __device__ cudaDMAStrided (const int dmaID,
 			     const int num_dma_threads,
 			     const int num_compute_threads,
@@ -1189,6 +1189,12 @@ public:
 				thread_bytes = (num_vec_loads-(dma_col_iters*MAX_LDS_OUTSTANDING_PER_THREAD))*ALIGNMENT + (leftover_bytes%max_thread_bytes);
 			}
 		}
+#ifdef CUDADMA_DEBUG_ON 
+		if (/*(CUDADMA_BASE::barrierID_full==2)&&*/(CUDADMA_BASE::is_dma_thread))
+		{
+			printf("DMA id %d: element_id %d  src_offset %d  dst_offset %d  row_iters %d  warps_per_elem %d  thread_bytes %d  src_row_iter %d  dst_row_iter %d  col_iters %d  col_iter_inc %d\n",CUDADMA_DMA_TID,ELMT_ID,dma_src_offset,dma_dst_offset,dma_row_iters,WARPS_PER_EL,thread_bytes, dma_src_row_iter_inc, dma_dst_row_iter_inc, dma_col_iters, dma_col_iter_inc);
+		} 
+#endif
 	}
 
   // Constructor for different source and destination strides
@@ -1256,9 +1262,9 @@ public:
 			}
 		}
 #ifdef CUDADMA_DEBUG_ON 
-		if ((CUDADMA_BASE::barrierID_full==2)&&(CUDADMA_BASE::is_dma_thread))
+		if ((CUDADMA_BASE::barrierID_full==4)&&(CUDADMA_BASE::is_dma_thread))
 		{
-			printf("DMA id %d: element_id %d  src_offset %d  dst_offset %d  row_iters %d  warps_per_elem %d\n",CUDADMA_DMA_TID,ELMT_ID,dma_src_offset,dma_dst_offset,dma_row_iters,WARPS_PER_EL);
+			printf("DMA id %d: element_id %d  src_offset %d  dst_offset %d  row_iters %d  warps_per_elem %d  thread_bytes %d  col_iters %d  col_iter_inc %d\n",CUDADMA_DMA_TID,ELMT_ID,dma_src_offset,dma_dst_offset,dma_row_iters,WARPS_PER_EL,thread_bytes, dma_col_iters, dma_col_iter_inc);
 		} 
 #endif
 	}

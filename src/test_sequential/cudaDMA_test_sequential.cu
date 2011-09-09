@@ -28,6 +28,10 @@
 #include "cuda.h"
 #include "cuda_runtime.h"
 
+#include "../../include/cudaDMA.h"
+
+#define WARP_SIZE 32
+
 // includes, project
 
 // includes, kernels
@@ -43,7 +47,7 @@
 	}
 
 // I hate global variables, but whatever
-int total_experiments = 0;
+long total_experiments = 0;
 
 // Forward declaration
 template<typename TYPE, int BUFFER_SIZE, int MAX_BYTES,
@@ -173,6 +177,316 @@ __host__ float2 make_zero() { return make_float2(0.0f,0.0f); }
 template<>
 __host__ float4 make_zero() { return make_float4(0.0f, 0.0f, 0.0f, 0.0f); }
 
+template<int MAX_BYTES_PER_THREAD, int ALIGNMENT, int ALIGN_OFFSET>
+__global__ void __launch_bounds__(1024,1)
+dma_ld_corner( float *idata, float *odata, int num_floats,
+		int num_compute_threads, int num_dma_threads_per_ld)
+{
+	extern __shared__ float buffer[];
+	
+	cudaDMASequential<MAX_BYTES_PER_THREAD, ALIGNMENT>
+	  dma0 (1, num_dma_threads_per_ld, num_compute_threads,
+		num_compute_threads, num_floats*sizeof(float));
+
+	if (dma0.owns_this_thread())
+	{
+		float *base_ptr = &(idata[ALIGN_OFFSET]);
+		dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+	}
+	else
+	{
+		dma0.start_async_dma();
+		dma0.wait_for_dma_finish();
+		int iters = num_floats/num_compute_threads;
+		int index = threadIdx.x;
+		for (int i=0; i<iters; i++)
+		{
+			float res = buffer[index+ALIGN_OFFSET];
+			odata[index] = res;
+			index += num_compute_threads;
+		}
+		if (index < num_floats)
+		{
+			float res = buffer[index+ALIGN_OFFSET];
+			odata[index] = res;
+		}
+	}
+}
+
+template<int MAX_BYTES_PER_THREAD, int ALIGNMENT, int ALIGN_OFFSET>
+__host__ bool run_corner_experiment(int num_floats, int dma_warps)
+{
+	int shared_buffer_size = (num_floats+ALIGN_OFFSET)*sizeof(float);
+	// Check to see if we're using more shared memory than there is, if so return
+	if (shared_buffer_size > 49152)
+		return true;
+
+	// Allocate the input data
+	float *h_idata = (float*)malloc((num_floats+ALIGN_OFFSET)*sizeof(float));
+	for (int i=0; i<(num_floats+ALIGN_OFFSET); i++)
+		h_idata[i] = float(i);
+	
+	// Allocate device memory for the input and copy the result down
+	float *d_idata;
+	CUDA_SAFE_CALL( cudaMalloc( (void**) &d_idata, (num_floats+ALIGN_OFFSET)*sizeof(float) ));
+	CUDA_SAFE_CALL( cudaMemcpy( d_idata, h_idata, (num_floats+ALIGN_OFFSET)*sizeof(float), cudaMemcpyHostToDevice));
+
+	// allocate memory for the result
+	float *d_odata;
+	CUDA_SAFE_CALL( cudaMalloc( (void**) &d_odata, num_floats*sizeof(float) ));
+	float *h_odata = (float*)malloc(num_floats*sizeof(float));
+	for (int i=0; i<num_floats; i++)
+		h_odata[i] = 0.0f;
+	CUDA_SAFE_CALL( cudaMemcpy( d_odata, h_odata, num_floats*sizeof(float), cudaMemcpyHostToDevice));	
+
+	//int num_compute_warps = (num_floats+WARP_SIZE-1)/WARP_SIZE;
+	int num_compute_warps = 1;
+	int total_threads = (num_compute_warps + dma_warps)*WARP_SIZE;
+
+	//fprintf(stdout,"Corner case experiment: %ld bytes, %d max bytes per thread, %d DMA warps, %d alignment, %d offset, ",num_floats*sizeof(float), MAX_BYTES_PER_THREAD, dma_warps, ALIGNMENT, ALIGN_OFFSET);
+	//fflush(stdout);
+
+	// run the experiment
+	dma_ld_corner<MAX_BYTES_PER_THREAD,ALIGNMENT,ALIGN_OFFSET><<<1,total_threads,shared_buffer_size,0>>>(d_idata, d_odata, num_floats, num_compute_warps*WARP_SIZE, dma_warps*WARP_SIZE);	
+	CUDA_SAFE_CALL( cudaThreadSynchronize());
+
+	CUDA_SAFE_CALL( cudaMemcpy( h_odata, d_odata, num_floats*sizeof(float), cudaMemcpyDeviceToHost));
+
+	// Check the result
+	bool pass = true;
+	for (int i=0; i<num_floats; i++)
+	{
+		if (h_odata[i] != h_idata[i+ALIGN_OFFSET])
+		{
+			fprintf(stdout,"Corner case experiment: %ld bytes, %d max bytes per thread, %d DMA warps, %d alignment, %d offset, ",num_floats*sizeof(float), MAX_BYTES_PER_THREAD, dma_warps, ALIGNMENT, ALIGN_OFFSET);
+			printf("Element %d was expecting %f but received %f, ",i,h_idata[i+ALIGN_OFFSET],h_odata[i]);
+			pass = false;
+			break;
+		}
+	}
+	if (!pass)
+	{
+		fprintf(stdout,"Result - %s\n",(pass?"SUCCESS":"FAILURE"));
+		fflush(stdout);
+	}
+	
+	CUDA_SAFE_CALL(cudaFree(d_idata));
+	CUDA_SAFE_CALL(cudaFree(d_odata));
+	free(h_idata);
+	free(h_odata);
+
+	total_experiments++;
+
+	return pass;
+}
+
+template<int MAX_BYTES_PER_THREAD, int ALIGNMENT, int ALIGN_OFFSET>
+__host__ void run_all_corner_experiments(bool &success, int max_dma_warps)
+{
+	printf("Running all corner experiments for max bytes per thread %d - alignment %d - offset %d...\n",MAX_BYTES_PER_THREAD,ALIGNMENT,ALIGN_OFFSET);
+	for (int dma_warps=1; dma_warps <= max_dma_warps; dma_warps++)
+	{
+		int max_total_floats = MAX_BYTES_PER_THREAD*dma_warps*WARP_SIZE/sizeof(float);
+		for (int num_floats=4; num_floats < max_total_floats; num_floats++)
+		{
+			success = success && run_corner_experiment<MAX_BYTES_PER_THREAD,ALIGNMENT,ALIGN_OFFSET>(num_floats, dma_warps);
+		}	
+	}
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET>
+__host__ void run_all_alignment_tests(bool &success, int max_dma_warps)
+{
+	{
+		const int offset = 0;
+		// Handle some strange cases in case max bytes per thread is less than alignment
+		if ((4+offset)>=ALIGNMENT) run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		if ((8+offset)>=ALIGNMENT) run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		if ((12+offset)>=ALIGNMENT)run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 32;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 64;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 96;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 128;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 160;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 192;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 224;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 256;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 288;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 320;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 352;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 384;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 416;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 448;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 480;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+	{
+		const int offset = 512;
+		run_all_corner_experiments<4+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<8+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<12+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<16+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<20+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<24+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<28+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+		run_all_corner_experiments<32+offset,ALIGNMENT,ALIGN_OFFSET>(success,max_dma_warps);
+	}
+}
+
 template<typename TYPE, int BUFFER_SIZE, int MAX_BYTES,
 		int NUM_ITERS, int ALIGNMENT, int ALIGN_OFFSET>
 __host__ bool run_experiment(int num_elements, int dma_warps)
@@ -197,6 +511,13 @@ __host__ bool run_experiment(int num_elements, int dma_warps)
 	// allocate device memory for the results
 	TYPE *d_odata;
 	CUDA_SAFE_CALL( cudaMalloc( (void**) &d_odata, out_size));
+	// allocate host memory for checking results
+	TYPE *h_odata = (TYPE*) malloc(out_size);
+	// Zero out the destination
+	for (int i=0; i<BUFFER_SIZE; i++)
+		h_odata[i] = make_zero<TYPE>();
+	CUDA_SAFE_CALL( cudaMemcpy( d_odata, h_odata, out_size, cudaMemcpyHostToDevice));
+
 	unsigned int num_threads = BUFFER_SIZE + (32 * dma_warps);
 
 	fprintf(stdout,"Experiment: Type-%2ld Elements-(%3d+%2d)=%3d Alignment-%2d Offset-%1d DMA warps-%2d Total Threads-%4d ",sizeof(TYPE), BUFFER_SIZE-32, num_elements-(BUFFER_SIZE-32), num_elements, ALIGNMENT, ALIGN_OFFSET, dma_warps, num_threads); 
@@ -215,9 +536,6 @@ __host__ bool run_experiment(int num_elements, int dma_warps)
 	CUDA_SAFE_CALL(cudaGetLastError());
 	float f_time;
 	cudaEventElapsedTime( &f_time, start, stop);
-
-	// allocate host memory for checking results
-	TYPE *h_odata = (TYPE*) malloc(out_size);
 
 	// copy the results back
 	CUDA_SAFE_CALL( cudaMemcpy( h_odata, d_odata, out_size, cudaMemcpyDeviceToHost));
@@ -280,7 +598,26 @@ int main( int argc, char** argv)
     bool success4_42 = true;
     bool success4_43 = true;
 
+    bool corner16_0 = true;
+    bool corner08_0 = true;
+    bool corner08_2 = true;
+    bool corner04_0 = true;
+    bool corner04_1 = true;
+    bool corner04_2 = true;
+    bool corner04_3 = true;
+
     CUDA_SAFE_CALL(cudaSetDevice( 0 ));
+    // Corner case tests
+    {
+	run_all_alignment_tests<16,0>(corner16_0,16);
+	run_all_alignment_tests<8,0>(corner08_0,16);
+	run_all_alignment_tests<8,2>(corner08_2,16);
+	run_all_alignment_tests<4,0>(corner04_0,16);
+	run_all_alignment_tests<4,1>(corner04_1,16);
+	run_all_alignment_tests<4,2>(corner04_2,16);
+	run_all_alignment_tests<4,3>(corner04_3,16);	
+	//run_corner_experiment<28,16,0>(133,1);
+    } 
 
     // Test the float4 cases
     {
@@ -1926,12 +2263,18 @@ int main( int argc, char** argv)
     printf("\tFloat -Alignment04-Offset1: %s\n",(success4_41?"SUCCESS":"FAILURE"));
     printf("\tFloat -Alignment04-Offset2: %s\n",(success4_42?"SUCCESS":"FAILURE"));
     printf("\tFloat -Alignment04-Offset3: %s\n",(success4_43?"SUCCESS":"FAILURE"));
-    printf("\n\tTotal Experiments - %d\n",total_experiments);
+    printf("\n");
+    printf("\tCorner Case Alignment16-Offset0: %s\n",(corner16_0?"SUCCESS":"FAILURE"));
+    printf("\tCorner Case Alignment08-Offset0: %s\n",(corner08_0?"SUCCESS":"FAILURE"));
+    printf("\tCorner Case Alignment08-Offset2: %s\n",(corner08_2?"SUCCESS":"FAILURE"));
+    printf("\tCorner Case Alignment04-Offset0: %s\n",(corner04_0?"SUCCESS":"FAILURE"));
+    printf("\tCorner Case Alignment04-Offset1: %s\n",(corner04_1?"SUCCESS":"FAILURE"));
+    printf("\tCorner Case Alignment04-Offset2: %s\n",(corner04_2?"SUCCESS":"FAILURE"));
+    printf("\tCorner Case Alignment04-Offset3: %s\n",(corner04_3?"SUCCESS":"FAILURE"));
+    printf("\n\tTotal Experiments - %ld\n",total_experiments);
     return 0;
 }
 
-
-#include "../../include/cudaDMA.h"
 
 //#define DEBUG_PRINT 1
 

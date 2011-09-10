@@ -1385,8 +1385,10 @@ public:
 // Total number of sides that can be handled by a warp, each thread can handle MAX_LDS_OUTSTANDING sides 
 #define SIDES_PER_WARP (warpSize/THREADS_PER_SIDE)*MAX_LDS_OUTSTANDING_PER_THREAD
 // The remaining warps after the warps have been allocated to the rows
-#define REMAINING_WARPS ((ROWS_PER_STEP*MAX_WARPS_PER_ROW < (num_dma_threads/warpSize)) ? \
-				(num_dma_threads/warpSize) - (ROWS_PER_STEP*MAX_WARPS_PER_ROW) : 0 )
+#define REMAINING_WARPS (ROWS_PER_STEP >= (2*RADIUS) ? \
+				(num_dma_threads/warpSize) - (2*RADIUS)*MAX_WARPS_PER_ROW : 0)
+//#define REMAINING_WARPS ((ROWS_PER_STEP*MAX_WARPS_PER_ROW < (num_dma_threads/warpSize)) ? \
+//				(num_dma_threads/warpSize) - (ROWS_PER_STEP*MAX_WARPS_PER_ROW) : 0 )
 
 // Asserting sizeof(ELMT_TYPE) <= ALIGNMENT
 template<typename ELMT_TYPE, int RADIUS, bool CORNERS, int ALIGNMENT>
@@ -1550,6 +1552,22 @@ public:
 				}
 			}	
 		}
+#ifdef CUDADMA_DEBUG_ON
+		if (CUDADMA_BASE::is_dma_thread)
+		{
+			printf("DMA id %2d: col_iter %d col_iter_inc %d row_id %d row_iters %d src_row_inc %d dst_row_inc %d src_top_offset %d src_bot_offset %d dst_top_offset %d dst_bot_offset %d thread_bytes %d\n",CUDADMA_DMA_TID,dma_col_iters,dma_col_iter_inc, dma_row_id, dma_row_iters, dma_src_row_iter_inc, dma_dst_row_iter_inc, dma_src_top_offset, dma_src_bot_offset, dma_dst_top_offset, dma_dst_bot_offset);
+		}
+		__syncthreads();
+		if (CUDADMA_BASE::is_dma_thread)
+		{
+			printf("DMA id %2d: side_id %d side_load %d side_src_iter_inc %d side_dst_iter_inc %d side_src_offset %d side_dst_offset %d side_iters %d side_active %d\n",CUDADMA_DMA_TID, side_id, side_load, side_src_iter_inc, side_dst_iter_inc, side_src_offset, side_dst_offset, side_iters, side_active);
+		}
+		__syncthreads();
+		if (CUDADMA_BASE::is_dma_thread)
+		{
+			printf("DMA id %2d: optimized %d split %d row_thread %d\n",optimized,split,row_thread);
+		}
+#endif
 	}
 public:
   __device__ __forceinline__ void execute_dma(void * src_origin, void * dst_origin) const
@@ -1557,50 +1575,65 @@ public:
 	// First check if this is the optimized case
 	if (optimized)
 	{
-		if (dma_row_id < (2*RADIUS)) // These are the row loader threads
+		// For the optimized case we know that everything can be loaded in a single pass
+		// so we can do some optimizations like pre-loading into registers
+		if (row_thread) // These are the row loader threads
 		{
-			
+			char *src_row_ptr = ((char*)src_origin) + (dma_row_id<RADIUS?dma_src_top_offset:dma_src_bot_offset);
+			char *dst_row_ptr = ((char*)dst_origin) + (dma_row_id<RADIUS?dma_dst_top_offset:dma_dst_bot_offset);
+			load_rows_opt(src_row_ptr, dst_row_ptr);	
 		}
 		else // These are the side loader threads
 		{
-
+			char *src_side_ptr = ((char*)src_origin) + side_src_offset;
+			char *dst_side_ptr = ((char*)dst_origin) + side_dst_offset;
+			load_sides_opt(src_side_ptr, dst_side_ptr);
 		}
+		// Indicate that we finished the load
+		CUDADMA_BASE::finish_async_dma();
 	}
-	else
+	else if (split) // Same as above but threads might night to run multiple iterations
 	{
-		// If this isn't optimized check to see if the warps are split or not
-		if (split)
+		CUDADMA_BASE::wait_for_dma_start();
+		if (row_thread) // These are the row loader threads
 		{
-			if (dma_row_id < (2*RADIUS)) // These are the row loader threads
-			{
-
-			}
-			else // These are the side loader threads
-			{
-
-			}
-		}
-		else  // In this case all threads have to load both rows and sides (the general case)
-		{
-			// Wait for the transfer to begin
-			CUDADMA_BASE::wait_for_dma_start();
-			// Do the top first
-			char * src_row_ptr = ((char*)src_origin) + dma_src_top_offset;
-			char * dst_row_ptr = ((char*)dst_origin) + dma_dst_top_offset;
+			char *src_row_ptr = ((char*)src_origin) + dma_src_top_offset;
+			char *dst_row_ptr = ((char*)dst_origin) + dma_dst_top_offset;
 			int row_id = dma_row_id;
 			load_rows<RADIUS>(row_id, src_row_ptr, dst_row_ptr);
-			// Now do the bottom set of rows
 			src_row_ptr = ((char*)src_origin) + dma_src_bot_offset;
 			dst_row_ptr = ((char*)dst_origin) + dma_dst_bot_offset;
-			load_rows<2*RADIUS>(row_id, src_row_ptr, dst_row_ptr);
-			// We've finished the rows, now do the sides
-			char * src_side_ptr = ((char*)src_origin) + side_src_offset;
-			char * dst_side_ptr = ((char*)dst_origin) + side_dst_offset;
-			if (side_active)
-				load_sides(src_side_ptr, dst_side_ptr);	
-			// We're finally finished, indicate we're done
-			CUDADMA_BASE::finish_async_dma();
+			load_rows<RADIUS>(row_id, src_row_ptr, dst_row_ptr);
 		}
+		else // These are the side loader threads
+		{
+			char *src_side_ptr = ((char*)src_origin) + side_src_offset;
+			char *dst_side_ptr = ((char*)dst_origin) + side_dst_offset;
+			if (side_active)
+				load_sides(src_side_ptr,dst_side_ptr);
+		}
+		CUDADMA_BASE::finish_async_dma();
+	}
+	else  // In this case all threads have to load both rows and sides (the general case)
+	{
+		// Wait for the transfer to begin
+		CUDADMA_BASE::wait_for_dma_start();
+		// Do the top first
+		char * src_row_ptr = ((char*)src_origin) + dma_src_top_offset;
+		char * dst_row_ptr = ((char*)dst_origin) + dma_dst_top_offset;
+		int row_id = dma_row_id;
+		load_rows<RADIUS>(row_id, src_row_ptr, dst_row_ptr);
+		// Now do the bottom set of rows
+		src_row_ptr = ((char*)src_origin) + dma_src_bot_offset;
+		dst_row_ptr = ((char*)dst_origin) + dma_dst_bot_offset;
+		load_rows<2*RADIUS>(row_id, src_row_ptr, dst_row_ptr);
+		// We've finished the rows, now do the sides
+		char * src_side_ptr = ((char*)src_origin) + side_src_offset;
+		char * dst_side_ptr = ((char*)dst_origin) + side_dst_offset;
+		if (side_active)
+			load_sides(src_side_ptr, dst_side_ptr);	
+		// We're finally finished, indicate we're done
+		CUDADMA_BASE::finish_async_dma();
 	}
   }
 private: // Helper methods
@@ -1659,6 +1692,39 @@ private: // Helper methods
 	  dst_temp = dst_row_ptr;
 	}
   }
+  __device__ __forceinline__ void load_rows_opt(char *src_row_ptr, char *dst_row_ptr) const
+  {
+	switch (ALIGNMENT)
+	  {
+	    case 4:
+	      {
+		CUDADMA_BASE::template do_xfer<true,ALIGNMENT> (src_row_ptr,dst_row_ptr,
+					(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ?
+					(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) :
+					(thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0));
+		break;
+	      }
+	    case 8:
+	      {
+		CUDADMA_BASE::template do_xfer<true,ALIGNMENT> (src_row_ptr, dst_row_ptr,
+					(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ?
+					(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) :
+					(thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0));
+		break;
+	      }
+	    case 16:
+	      {
+	   	CUDADMA_BASE::template do_xfer<true,ALIGNMENT> (src_row_ptr, dst_row_ptr, 
+					(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ?
+					(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) :
+					(thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0));
+		break;
+	      }
+	    default:
+	      printf("ALIGNMENT must be one of (4,8,16)\n");
+	      break;
+	  }
+  }
   __device__ __forceinline__ void load_sides(char * src_side_ptr, char * dst_side_ptr) const
   {
 	for (int i = 0; i < side_iters; i++)
@@ -1691,6 +1757,74 @@ private: // Helper methods
 		src_side_ptr += side_src_iter_inc;
 		dst_side_ptr += side_dst_iter_inc;
 	}
+  }
+  __device__ __forceinline__ void load_sides_opt(char * src_side_ptr, char * dst_side_ptr) const
+  {
+	if (side_active)
+	{
+	switch (SIDE_XFER_SIZE)
+	  {
+	    case 4:
+	      {
+		float tmp[TOTAL_SIDE_LOADS];
+		#pragma unroll
+		for (int i=0; i<TOTAL_SIDE_LOADS; i++)
+		{
+		  tmp[i] = (*((float*)(src_side_ptr)));
+		  src_side_ptr += side_src_iter_inc;
+		}	
+		CUDADMA_BASE::wait_for_dma_start();
+		#pragma unroll
+		for (int i=0; i<TOTAL_SIDE_LOADS; i++)
+		{
+		  (*((float*)(dst_side_ptr))) = tmp[i];
+		  dst_side_ptr += side_dst_iter_inc;
+		}
+		break;
+	      }
+	    case 8:
+	      {
+		float2 tmp[TOTAL_SIDE_LOADS];
+		#pragma unroll
+		for (int i=0; i<TOTAL_SIDE_LOADS; i++)
+		{
+		  tmp[i] = (*((float2*)(src_side_ptr)));
+		  src_side_ptr += side_src_iter_inc;
+		}	
+		CUDADMA_BASE::wait_for_dma_start();
+		#pragma unroll
+		for (int i=0; i<TOTAL_SIDE_LOADS; i++)
+		{
+		  (*((float2*)(dst_side_ptr))) = tmp[i];
+		  dst_side_ptr += side_dst_iter_inc;
+		}
+		break;
+	      }
+	    case 16:
+	      {
+		float4 tmp[TOTAL_SIDE_LOADS];
+		#pragma unroll
+		for (int i=0; i<TOTAL_SIDE_LOADS; i++)
+		{
+		  tmp[i] = (*((float4*)(src_side_ptr)));
+		  src_side_ptr += side_src_iter_inc;
+		}	
+		CUDADMA_BASE::wait_for_dma_start();
+		#pragma unroll
+		for (int i=0; i<TOTAL_SIDE_LOADS; i++)
+		{
+		  (*((float4*)(dst_side_ptr))) = tmp[i];
+		  dst_side_ptr += side_dst_iter_inc;
+		}
+		break;
+	      }
+	    default:
+	      printf("Warning CUDA_DMA internal error, invalid side xfer size: %d\n", SIDE_XFER_SIZE);
+	      break;
+	  } 
+	}
+	else
+		CUDADMA_BASE::wait_for_dma_start();
   }
 public:
   // Public DMA-thread Synchronization Functions:

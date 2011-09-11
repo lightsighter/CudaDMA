@@ -263,7 +263,7 @@ bool run_all_experiments(int max_element_size, int max_element_count,
 		// Let's only check full stride cases if element_size is divisible by 31 so we can
 		// make the search space a little sparser and also test lots of potential strides
 		// on weird alignment offsets
-		if ((element_size%1031)==0)
+		if ((element_size<1024) && (element_size%127)==0)
 		{
 			// Make each of the strides range from min_stride to 2*min_stride
 			// This should cover all of the cases for a given element size
@@ -312,7 +312,7 @@ int main()
 	success04_2 = success04_2 && run_all_experiments<4,2>(8192,32,16);
 	success04_3 = success04_3 && run_all_experiments<4,3>(8192,32,16);
 
-	//success16_0 = success16_0 && run_experiment<16,0>(512,1,512,512,1);
+	//success16_0 = success16_0 && run_experiment<16,0>(513,1,516,516,1);
 
 	fprintf(stdout,"\nResults:\n");
 	fprintf(stdout,"\tAlignment16-Offset0: %s\n",(success16_0?"SUCCESS":"FAILURE"));

@@ -173,7 +173,7 @@ class cudaDMA {
 
   // Transfer primitives used by more than one subclass
   template<bool DO_SYNC, int ALIGNMENT>
-    __device__ __forceinline__ void do_xfer( void * src_ptr, void * dst_ptr, unsigned int xfer_size) const
+    __device__ __forceinline__ void do_xfer( void * src_ptr, void * dst_ptr, int xfer_size) const
   {
      switch (ALIGNMENT)
        {
@@ -200,7 +200,7 @@ class cudaDMA {
 
   // Manage transfers only aligned to 4 bytes
   template<bool DO_SYNC>
-   __device__ __forceinline__ void do_xfer_alignment_04( void * src_ptr, void * dst_ptr, unsigned int xfer_size) const
+   __device__ __forceinline__ void do_xfer_alignment_04( void * src_ptr, void * dst_ptr, int xfer_size) const
   {
     switch (xfer_size)
       {
@@ -237,7 +237,7 @@ class cudaDMA {
 
   // Manage transfers aligned to 8 byte boundary
   template<bool DO_SYNC>
-   __device__ __forceinline__ void do_xfer_alignment_08( void * src_ptr, void * dst_ptr, unsigned int xfer_size) const
+   __device__ __forceinline__ void do_xfer_alignment_08( void * src_ptr, void * dst_ptr, int xfer_size) const
   {
     switch (xfer_size)
       {
@@ -294,7 +294,7 @@ class cudaDMA {
 
   // Manage transfers aligned to 16 byte boundary
   template<bool DO_SYNC>
-   __device__ __forceinline__ void do_xfer_alignment_16( void * src_ptr, void * dst_ptr, unsigned int xfer_size) const
+   __device__ __forceinline__ void do_xfer_alignment_16( void * src_ptr, void * dst_ptr, int xfer_size) const
   {
     switch (xfer_size) 
       {
@@ -1120,6 +1120,8 @@ private:
 	const int dma_dst_row_iter_inc;
 	const int dma_src_offset;
 	const int dma_dst_offset;
+	const bool optimized;
+	const bool all_threads_active;
 	const bool warp_active;
 	const bool warp_partial;
 	int thread_bytes;
@@ -1161,6 +1163,8 @@ public:
 		dma_dst_row_iter_inc (el_sz*ELMT_PER_STEP),
 		dma_src_offset (ELMT_ID*el_stride),
 		dma_dst_offset (ELMT_ID*el_sz),
+		optimized (el_cnt<=ELMT_PER_STEP && dma_col_iters==0),
+		all_threads_active (el_sz % (ALIGNMENT*WARPS_PER_ELMT*warpSize) == 0),
 		warp_active  (ELMT_ID < ELMT_PER_STEP),
 		warp_partial (ELMT_ID < (el_cnt%ELMT_PER_STEP))
 	{
@@ -1190,6 +1194,9 @@ public:
 				thread_bytes = (num_vec_loads-(dma_col_iters*MAX_LDS_OUTSTANDING_PER_THREAD))*ALIGNMENT + (leftover_bytes%max_thread_bytes);
 			}
 		}
+		// If this is an optimized transfer, check to see if we actually should be transferring, if not make thread bytes zero
+		if (optimized && (ELMT_ID >= el_cnt))
+			thread_bytes = 0;
 #ifdef CUDADMA_DEBUG_ON 
 		if (/*(CUDADMA_BASE::barrierID_full==2)&&*/(CUDADMA_BASE::is_dma_thread))
 		{
@@ -1235,6 +1242,8 @@ public:
 		dma_dst_row_iter_inc (dst_stride*ELMT_PER_STEP),
 		dma_src_offset (ELMT_ID*src_stride),
 		dma_dst_offset (ELMT_ID*dst_stride),
+		optimized (el_cnt<=ELMT_PER_STEP && dma_col_iters==0),
+		all_threads_active (el_sz % (ALIGNMENT*WARPS_PER_ELMT*warpSize) == 0),
 		warp_active  (ELMT_ID < ELMT_PER_STEP),
 		warp_partial (ELMT_ID < (el_cnt%ELMT_PER_STEP))
 	{
@@ -1264,6 +1273,9 @@ public:
 				thread_bytes = (num_vec_loads-(dma_col_iters*MAX_LDS_OUTSTANDING_PER_THREAD))*ALIGNMENT + (leftover_bytes%max_thread_bytes);
 			}
 		}
+		// If this is an optimized transfer, check to see if we actually should be transferring, if not make thread bytes zero
+		if (optimized && (ELMT_ID >= el_cnt))
+			thread_bytes = 0;
 #ifdef CUDADMA_DEBUG_ON 
 		if ((CUDADMA_BASE::barrierID_full==4)&&(CUDADMA_BASE::is_dma_thread))
 		{
@@ -1274,27 +1286,45 @@ public:
 public:
   __device__ __forceinline__ void execute_dma( void * src_ptr, void * dst_ptr) const
   {
-	// Wait for the transfer to begin
-	CUDADMA_BASE::wait_for_dma_start();
-
 	char * src_row_ptr = ((char*)src_ptr)+dma_src_offset;
 	char * dst_row_ptr = ((char*)dst_ptr)+dma_dst_offset;
-	if (warp_active)
+
+	if (optimized)
 	{
-		for (int i = 0; i < dma_row_iters; i++)
+		int opt_xfer = (thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ?
+			   	(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) :
+			   	(thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0);
+		if (all_threads_active)
 		{
-		  // Copy the elment
-		  elmt_copy(src_row_ptr, dst_row_ptr);
-		  // Now set up for the next element
-		  src_row_ptr += dma_src_row_iter_inc;
-		  dst_row_ptr += dma_dst_row_iter_inc;
+			CUDADMA_BASE::template do_xfer<true,ALIGNMENT> (src_row_ptr, dst_row_ptr, opt_xfer);
+		}
+		else
+		{
+			CUDADMA_BASE::wait_for_dma_start();
+			CUDADMA_BASE::template do_xfer<false,ALIGNMENT> (src_row_ptr, dst_row_ptr, opt_xfer);
 		}
 	}
-	if (warp_partial)
+	else
 	{
-		// If there are remaining elements, perform those copies as well
-		elmt_copy(src_row_ptr, dst_row_ptr);	
+		CUDADMA_BASE::wait_for_dma_start();
+		if (warp_active)
+		{
+			for (int i = 0; i < dma_row_iters; i++)
+			{
+			  // Copy the elment
+			  elmt_copy(src_row_ptr, dst_row_ptr);
+			  // Now set up for the next element
+			  src_row_ptr += dma_src_row_iter_inc;
+			  dst_row_ptr += dma_dst_row_iter_inc;
+			}
+		}
+		if (warp_partial)
+		{
+			// If there are remaining elements, perform those copies as well
+			elmt_copy(src_row_ptr, dst_row_ptr);	
+		}
 	}
+
 	// Now we're finished, indicate we're done
 	CUDADMA_BASE::finish_async_dma();
   }
@@ -1662,10 +1692,6 @@ public:
 // The remaining warps after the warps have been allocated to the rows
 #define REMAINING_WARPS ((num_dma_threads/warpSize) > (2*RADIUS*MAX_WARPS_PER_ROW) ? \
 				(num_dma_threads/warpSize) - (2*RADIUS)*MAX_WARPS_PER_ROW : 0)
-//#define REMAINING_WARPS (ROWS_PER_STEP >= (2*RADIUS) ? \
-//				(num_dma_threads/warpSize) - (2*RADIUS)*MAX_WARPS_PER_ROW : 0)
-//#define REMAINING_WARPS ((ROWS_PER_STEP*MAX_WARPS_PER_ROW < (num_dma_threads/warpSize)) ? \
-//				(num_dma_threads/warpSize) - (ROWS_PER_STEP*MAX_WARPS_PER_ROW) : 0 )
 
 // Asserting sizeof(ELMT_TYPE) <= ALIGNMENT
 // Asserting (RADIUS*sizeof(ELMT_TYPE))%ALIGNMENT==0

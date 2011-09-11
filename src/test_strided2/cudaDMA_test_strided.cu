@@ -50,13 +50,13 @@
 // I hate global variables, but whatever
 long total_experiments = 0;
 
-template<int ALIGNMENT, int ALIGN_OFFSET>
+template<int ALIGNMENT, int ALIGN_OFFSET, int MAX_BYTES_PER_ELMT>
 __global__ void __launch_bounds__(1024,1)
 dma_ld_test ( float *idata, float *odata, int element_size /*in number of floats*/, int num_elements, int src_stride/*bytes*/, int dst_stride/*bytes*/, int buffer_size /*number of floats*/, int num_compute_threads, int num_dma_threads_per_ld)
 {
 	extern __shared__ float buffer[];	
 
-	cudaDMAStrided<ALIGNMENT>
+	cudaDMAStrided<MAX_BYTES_PER_ELMT,ALIGNMENT>
 	  dma0 (1, num_dma_threads_per_ld, num_compute_threads,
 		num_compute_threads, element_size*sizeof(float),
 		num_elements, src_stride*sizeof(float), dst_stride*sizeof(float));
@@ -132,11 +132,79 @@ __host__ bool run_experiment(int element_size, int element_count,
 	int num_compute_warps = 1;
 	int total_threads = (num_compute_warps + dma_warps)*WARP_SIZE;
 
-	dma_ld_test<ALIGNMENT,ALIGN_OFFSET>
-		<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-		(d_idata, d_odata, element_size, element_count, src_stride,
-		 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
-		 dma_warps*WARP_SIZE);
+	int elem_bytes = element_size*sizeof(float);
+	if (elem_bytes <= 64)
+	{
+		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,64>
+			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+			(d_idata, d_odata, element_size, element_count, src_stride,
+			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
+			 dma_warps*WARP_SIZE);
+	}
+	else if (elem_bytes <= 128)
+	{
+		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,128>
+			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+			(d_idata, d_odata, element_size, element_count, src_stride,
+			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
+			 dma_warps*WARP_SIZE);
+	}
+	else if (elem_bytes <= 256)
+	{
+		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,256>
+			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+			(d_idata, d_odata, element_size, element_count, src_stride,
+			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
+			 dma_warps*WARP_SIZE);
+	}
+	else if (elem_bytes <= 512)
+	{
+		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,512>
+			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+			(d_idata, d_odata, element_size, element_count, src_stride,
+			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
+			 dma_warps*WARP_SIZE);
+	}
+	else if (elem_bytes <= 1024)
+	{
+		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,1024>
+			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+			(d_idata, d_odata, element_size, element_count, src_stride,
+			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
+			 dma_warps*WARP_SIZE);
+	}
+	else if (elem_bytes <= 2048)
+	{
+		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,2048>
+			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+			(d_idata, d_odata, element_size, element_count, src_stride,
+			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
+			 dma_warps*WARP_SIZE);
+	}
+	else if (elem_bytes <= 4096)
+	{
+		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,4096>
+			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+			(d_idata, d_odata, element_size, element_count, src_stride,
+			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
+			 dma_warps*WARP_SIZE);
+	}
+	else if (elem_bytes <= 8192)
+	{
+		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,8192>
+			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+			(d_idata, d_odata, element_size, element_count, src_stride,
+			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
+			 dma_warps*WARP_SIZE);
+	}
+	else
+	{
+		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,0>
+			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+			(d_idata, d_odata, element_size, element_count, src_stride,
+			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
+			 dma_warps*WARP_SIZE);
+	}
 	CUDA_SAFE_CALL( cudaThreadSynchronize());
 
 	CUDA_SAFE_CALL( cudaMemcpy (h_odata, d_odata, output_size*sizeof(float), cudaMemcpyDeviceToHost));
@@ -152,8 +220,8 @@ __host__ bool run_experiment(int element_size, int element_count,
 			//printf("%f ",h_odata[out_index+j]);
 			if (h_idata[in_index+j] != h_odata[out_index+j])
 			{
-				fprintf(stdout,"Experiment: %ld element bytes, %d elements, %ld source stride, %ld destination stride, %d DMA warps, %d alignment, %d offset, ",element_size*sizeof(float),element_count,src_stride*sizeof(float),dst_stride*sizeof(float),dma_warps,ALIGNMENT,ALIGN_OFFSET);
-				fprintf(stdout,"Index %d of element %d was expecting %f but received %f, ", j, i, h_idata[in_index+j], h_odata[out_index+j]);
+				fprintf(stderr,"Experiment: %ld element bytes, %d elements, %ld source stride, %ld destination stride, %d DMA warps, %d alignment, %d offset, ",element_size*sizeof(float),element_count,src_stride*sizeof(float),dst_stride*sizeof(float),dma_warps,ALIGNMENT,ALIGN_OFFSET);
+				fprintf(stderr,"Index %d of element %d was expecting %f but received %f\n", j, i, h_idata[in_index+j], h_odata[out_index+j]);
 				pass = false;
 				break;
 			}
@@ -195,7 +263,7 @@ bool run_all_experiments(int max_element_size, int max_element_count,
 		// Let's only check full stride cases if element_size is divisible by 31 so we can
 		// make the search space a little sparser and also test lots of potential strides
 		// on weird alignment offsets
-		if ((element_size%31)==0)
+		if ((element_size%1031)==0)
 		{
 			// Make each of the strides range from min_stride to 2*min_stride
 			// This should cover all of the cases for a given element size
@@ -243,6 +311,8 @@ int main()
 	success04_1 = success04_1 && run_all_experiments<4,1>(8192,32,16);
 	success04_2 = success04_2 && run_all_experiments<4,2>(8192,32,16);
 	success04_3 = success04_3 && run_all_experiments<4,3>(8192,32,16);
+
+	//success16_0 = success16_0 && run_experiment<16,0>(512,1,512,512,1);
 
 	fprintf(stdout,"\nResults:\n");
 	fprintf(stdout,"\tAlignment16-Offset0: %s\n",(success16_0?"SUCCESS":"FAILURE"));

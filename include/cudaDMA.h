@@ -30,6 +30,7 @@ __device__ __forceinline__ void ptx_cudaDMA_barrier_nonblocking (const int name,
 #define MAX_BYTES_OUTSTANDING_PER_THREAD (4*ALIGNMENT) 
 #define MAX_LDS_OUTSTANDING_PER_THREAD 4
 #define CUDADMA_DMA_TID (threadIdx.x-dma_threadIdx_start)
+#define WARP_SIZE 32
 
 //#define CUDADMA_DEBUG_ON
 
@@ -192,9 +193,11 @@ class cudaDMA {
 	      do_xfer_alignment_16<DO_SYNC>(src_ptr,dst_ptr,xfer_size);
 	      break;
 	    }
+#ifdef CUDADMA_DEBUG_ON
           default:
             printf("Illegal alignment size (%d).  Must be one of (4,8,16).\n",ALIGNMENT);
             break;
+#endif
        }
   }
 
@@ -229,9 +232,11 @@ class cudaDMA {
 	   if (DO_SYNC) CUDADMA_BASE::wait_for_dma_start(); 
 	   break;
 	 }
+#ifdef CUDADMA_DEBUG_ON
          default:
            printf("Invalid xfer size (%u) for dma_tid = %d\n",xfer_size, CUDADMA_BASE::dma_tid);
 	   break;
+#endif
       }
   }
 
@@ -286,9 +291,11 @@ class cudaDMA {
 	   if (DO_SYNC) CUDADMA_BASE::wait_for_dma_start(); 
 	   break;
 	 }
+#ifdef CUDADMA_DEBUG_ON
          default:
            printf("Invalid xfer size (%u) for dma_tid = %d\n",xfer_size, CUDADMA_BASE::dma_tid);
 	   break;
+#endif
       }
   }
 
@@ -383,9 +390,11 @@ class cudaDMA {
 	  if (DO_SYNC) CUDADMA_BASE::wait_for_dma_start(); 
 	  break;
 	}
+#ifdef CUDADMA_DEBUG_ON
       default:
 	printf("Invalid xfer size (%u) for dma_tid = %d\n",xfer_size, CUDADMA_BASE::dma_tid);
 	break;
+#endif
       }
   }
 
@@ -651,9 +660,11 @@ class cudaDMASequential : public CUDADMA_BASE {
             }
             break;
           }
+#ifdef CUDADMA_DEBUG_ON
         default:
           printf("ALIGNMENT must be one of (4,8,16)\n");
           break;
+#endif
       }
     // Handle the leftovers
     if (all_threads_active) {
@@ -1094,19 +1105,23 @@ class cudaDMAStridedSmallElements : public CUDADMA_BASE {
 
 #else // The old cudaDMAStrided
 
-#define MAX_WARPS_PER_ELMT ((MAX_BYTES_PER_ELMT+(warpSize*MAX_BYTES_OUTSTANDING_PER_THREAD-1))/(warpSize*MAX_BYTES_OUTSTANDING_PER_THREAD))
-#define WARPS_PER_ELMT ((MAX_WARPS_PER_ELMT >= (num_dma_threads/warpSize)) ? (num_dma_threads/warpSize) : MAX_WARPS_PER_ELMT)
-#define ELMT_PER_STEP ((num_dma_threads/warpSize)/WARPS_PER_ELMT)
-#define ELMT_ID ((CUDADMA_DMA_TID/warpSize)/WARPS_PER_ELMT)
-#define CUDADMA_WARP_TID (threadIdx.x - (dma_threadIdx_start + (ELMT_ID*WARPS_PER_ELMT*warpSize)))
+#define MAX_WARPS_PER_ELMT ((MAX_BYTES_PER_ELMT+(WARP_SIZE*MAX_BYTES_OUTSTANDING_PER_THREAD-1))/(WARP_SIZE*MAX_BYTES_OUTSTANDING_PER_THREAD))
+// If we can use all the warps on one element, then do it,
+// Otherwise check to see if we are wasting DMA warps due to low element count
+// If so allocate more warps to a single element than is necessary to improve MLP
+#define WARPS_PER_ELMT ((MAX_WARPS_PER_ELMT >= (num_dma_threads/WARP_SIZE)) ? (num_dma_threads/WARP_SIZE) : \
+	(num_dma_threads/WARP_SIZE)>(MAX_WARPS_PER_ELMT*el_cnt) ? (num_dma_threads/WARP_SIZE)/el_cnt  : MAX_WARPS_PER_ELMT)
+#define ELMT_PER_STEP ((num_dma_threads/WARP_SIZE)/WARPS_PER_ELMT)
+#define ELMT_ID ((CUDADMA_DMA_TID/WARP_SIZE)/WARPS_PER_ELMT)
+#define CUDADMA_WARP_TID (threadIdx.x - (dma_threadIdx_start + (ELMT_ID*WARPS_PER_ELMT*WARP_SIZE)))
 #define CUDADMASTRIDED_DMA1_ITER_OFFS (ALIGNMENT*CUDADMA_WARP_TID)
-#define CUDADMASTRIDED_DMA2_ITER_OFFS (1*ALIGNMENT*WARPS_PER_ELMT*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
-#define CUDADMASTRIDED_DMA3_ITER_OFFS (2*ALIGNMENT*WARPS_PER_ELMT*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
-#define CUDADMASTRIDED_DMA4_ITER_OFFS (3*ALIGNMENT*WARPS_PER_ELMT*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA2_ITER_OFFS (1*ALIGNMENT*WARPS_PER_ELMT*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA3_ITER_OFFS (2*ALIGNMENT*WARPS_PER_ELMT*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA4_ITER_OFFS (3*ALIGNMENT*WARPS_PER_ELMT*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)
 #define CUDADMASTRIDED_DMA1_OFFS (ALIGNMENT*CUDADMA_WARP_TID)	
-#define CUDADMASTRIDED_DMA2_OFFS (1*ALIGNMENT*WARPS_PER_ELMT*warpSize + ALIGNMENT*CUDADMA_WARP_TID)	
-#define CUDADMASTRIDED_DMA3_OFFS (2*ALIGNMENT*WARPS_PER_ELMT*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
-#define CUDADMASTRIDED_DMA4_OFFS (3*ALIGNMENT*WARPS_PER_ELMT*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA2_OFFS (1*ALIGNMENT*WARPS_PER_ELMT*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)	
+#define CUDADMASTRIDED_DMA3_OFFS (2*ALIGNMENT*WARPS_PER_ELMT*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA4_OFFS (3*ALIGNMENT*WARPS_PER_ELMT*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)
 
 template<int MAX_BYTES_PER_ELMT, int ALIGNMENT>
 class cudaDMAStrided : public CUDADMA_BASE
@@ -1156,20 +1171,20 @@ public:
 			CUDADMASTRIDED_DMA3_OFFS,
 			CUDADMASTRIDED_DMA4_OFFS),
 		el_sz (el_sz),	
-		dma_col_iters ((el_sz-4)/(MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_ELMT*warpSize)),
-		dma_col_iter_inc (MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_ELMT*warpSize),
+		dma_col_iters ((el_sz-4)/(MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_ELMT*WARP_SIZE)),
+		dma_col_iter_inc (MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_ELMT*WARP_SIZE),
 		dma_row_iters (el_cnt/ELMT_PER_STEP),
 		dma_src_row_iter_inc (el_stride*ELMT_PER_STEP),
 		dma_dst_row_iter_inc (el_sz*ELMT_PER_STEP),
 		dma_src_offset (ELMT_ID*el_stride),
 		dma_dst_offset (ELMT_ID*el_sz),
 		optimized (el_cnt<=ELMT_PER_STEP && dma_col_iters==0),
-		all_threads_active (el_sz % (ALIGNMENT*WARPS_PER_ELMT*warpSize) == 0),
+		all_threads_active (el_sz % (ALIGNMENT*WARPS_PER_ELMT*WARP_SIZE) == 0),
 		warp_active  (ELMT_ID < ELMT_PER_STEP),
 		warp_partial (ELMT_ID < (el_cnt%ELMT_PER_STEP))
 	{
-		int num_vec_loads  = el_sz / (ALIGNMENT*WARPS_PER_ELMT*warpSize);
-		int leftover_bytes = el_sz % (ALIGNMENT*WARPS_PER_ELMT*warpSize);
+		int num_vec_loads  = el_sz / (ALIGNMENT*WARPS_PER_ELMT*WARP_SIZE);
+		int leftover_bytes = el_sz % (ALIGNMENT*WARPS_PER_ELMT*WARP_SIZE);
 
 		if (leftover_bytes==0)
 		{
@@ -1235,20 +1250,20 @@ public:
 			CUDADMASTRIDED_DMA3_OFFS,
 			CUDADMASTRIDED_DMA4_OFFS),
 		el_sz (el_sz),	
-		dma_col_iters ((el_sz-4)/(MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_ELMT*warpSize)),
-		dma_col_iter_inc (MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_ELMT*warpSize),
-		dma_row_iters (el_cnt/ELMT_PER_STEP),
-		dma_src_row_iter_inc (src_stride*ELMT_PER_STEP),
-		dma_dst_row_iter_inc (dst_stride*ELMT_PER_STEP),
+		dma_col_iters ((el_sz-4)/(MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_ELMT*WARP_SIZE)), 
+		dma_col_iter_inc (MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_ELMT*WARP_SIZE),  
+		dma_row_iters (el_cnt/ELMT_PER_STEP), 
+		dma_src_row_iter_inc (src_stride*ELMT_PER_STEP), 
+		dma_dst_row_iter_inc (dst_stride*ELMT_PER_STEP), 
 		dma_src_offset (ELMT_ID*src_stride),
 		dma_dst_offset (ELMT_ID*dst_stride),
 		optimized (el_cnt<=ELMT_PER_STEP && dma_col_iters==0),
-		all_threads_active (el_sz % (ALIGNMENT*WARPS_PER_ELMT*warpSize) == 0),
+		all_threads_active (el_sz % (ALIGNMENT*WARPS_PER_ELMT*WARP_SIZE) == 0),
 		warp_active  (ELMT_ID < ELMT_PER_STEP),
 		warp_partial (ELMT_ID < (el_cnt%ELMT_PER_STEP))
 	{
-		int num_vec_loads  = el_sz / (ALIGNMENT*WARPS_PER_ELMT*warpSize);
-		int leftover_bytes = el_sz % (ALIGNMENT*WARPS_PER_ELMT*warpSize);
+		int num_vec_loads  = el_sz / (ALIGNMENT*WARPS_PER_ELMT*WARP_SIZE);
+		int leftover_bytes = el_sz % (ALIGNMENT*WARPS_PER_ELMT*WARP_SIZE);
 
 		if (leftover_bytes==0)
 		{
@@ -1289,90 +1304,98 @@ public:
 	char * src_row_ptr = ((char*)src_ptr)+dma_src_offset;
 	char * dst_row_ptr = ((char*)dst_ptr)+dma_dst_offset;
 
+	if (!optimized || !all_threads_active)
+		CUDADMA_BASE::wait_for_dma_start();
+
+	switch (ALIGNMENT)
+	  {
+	    case 4:
+	      {
+		if (!optimized && warp_active)
+		{
+			for (int i=0; i<dma_row_iters; i++)
+			{
+				copy_elmt<float>(src_row_ptr,dst_row_ptr);
+				src_row_ptr += dma_src_row_iter_inc;
+				dst_row_ptr += dma_dst_row_iter_inc;
+			}
+		}
+		if (!optimized && warp_partial)
+		{
+			// Only perform the bulk xfers
+			copy_elmt<float>(src_row_ptr,dst_row_ptr);
+		}
+		break;
+	      }
+	    case 8:
+	      {
+		if (!optimized && warp_active)
+		{
+			for (int i=0; i<dma_row_iters; i++)
+			{
+				copy_elmt<float2>(src_row_ptr,dst_row_ptr);
+				src_row_ptr += dma_src_row_iter_inc;
+				dst_row_ptr += dma_dst_row_iter_inc;
+			}
+		}
+		if (!optimized && warp_partial)
+		{
+			// Only perform the bulk xfers
+			copy_elmt<float2>(src_row_ptr,dst_row_ptr);
+		}
+		break;
+	      }
+	    case 16:
+	      {
+		if (!optimized && warp_active)
+		{
+			for (int i=0; i<dma_row_iters; i++)
+			{
+				copy_elmt<float4>(src_row_ptr,dst_row_ptr);
+				src_row_ptr += dma_src_row_iter_inc;
+				dst_row_ptr += dma_dst_row_iter_inc;
+			}
+		}
+		if (!optimized && warp_partial)
+		{
+			// Only perform the bulk xfers
+			copy_elmt<float4>(src_row_ptr,dst_row_ptr);
+		}
+	 	break;
+	      }
+#ifdef CUDADMA_DEBUG_ON
+	    default:
+	      printf("ALIGNMENT must be one of (4,8,16)\n");
+	      break;
+#endif
+	  }
 	if (optimized)
 	{
 		int opt_xfer = (thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ?
 			   	(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) :
 			   	(thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0);
 		if (all_threads_active)
-		{
-			CUDADMA_BASE::template do_xfer<true,ALIGNMENT> (src_row_ptr, dst_row_ptr, opt_xfer);
-		}
+			CUDADMA_BASE::template do_xfer<true,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);
 		else
-		{
-			CUDADMA_BASE::wait_for_dma_start();
-			CUDADMA_BASE::template do_xfer<false,ALIGNMENT> (src_row_ptr, dst_row_ptr, opt_xfer);
-		}
-	}
-	else
-	{
-		CUDADMA_BASE::wait_for_dma_start();
-		if (warp_active)
-		{
-			for (int i = 0; i < dma_row_iters; i++)
-			{
-			  // Copy the elment
-			  elmt_copy(src_row_ptr, dst_row_ptr);
-			  // Now set up for the next element
-			  src_row_ptr += dma_src_row_iter_inc;
-			  dst_row_ptr += dma_dst_row_iter_inc;
-			}
-		}
-		if (warp_partial)
-		{
-			// If there are remaining elements, perform those copies as well
-			elmt_copy(src_row_ptr, dst_row_ptr);	
-		}
-	}
-
-	// Now we're finished, indicate we're done
+			CUDADMA_BASE::template do_xfer<false,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);
+	}	
 	CUDADMA_BASE::finish_async_dma();
   }
 private:
-  __device__ __forceinline__ void elmt_copy(char *src_ptr, char *dst_ptr) const
+  template<typename BULK_TYPE>
+  __device__ __forceinline__ void copy_elmt(char * src_ptr, char * dst_ptr) const
   {
-	switch (ALIGNMENT)
-	  {
-	    case 4:
-	      {
-		  for (int j = 0; j < dma_col_iters; j++)
-		  {
-		    CUDADMA_BASE::template perform_four_xfers<float,float,false,false> (src_ptr, dst_ptr);
-		    src_ptr += dma_col_iter_inc;
-		    dst_ptr += dma_col_iter_inc;
-		  }
-		  break;
-	      }
-	    case 8:
-	      {
-		  for (int j = 0; j < dma_col_iters; j++)
-		  {
-		    CUDADMA_BASE::template perform_four_xfers<float2,float2,false,false> (src_ptr, dst_ptr);
-		    src_ptr += dma_col_iter_inc;
-		    dst_ptr += dma_col_iter_inc;
-		  }
-		  break;
-	      }
-	    case 16:
-	      {
-		  for (int j = 0; j < dma_col_iters; j++)
-		  {
-		    CUDADMA_BASE::template perform_four_xfers<float4,float4,false,false> (src_ptr, dst_ptr);
-		    src_ptr += dma_col_iter_inc;
-		    dst_ptr += dma_col_iter_inc;
-		  }
-		  break;
-	      }
-	    default:
-	      printf("ALIGNMENT must be one of (4,8,16)\n");
-	      break;
-	    }
-	  // Now handle the column leftovers
-	  CUDADMA_BASE::template do_xfer<false,ALIGNMENT> (src_ptr, dst_ptr,
+	for (int j=0; j<dma_col_iters; j++)
+	{
+		CUDADMA_BASE::template perform_four_xfers<BULK_TYPE,BULK_TYPE,false,false> (src_ptr,dst_ptr);
+		src_ptr += dma_col_iter_inc;
+		dst_ptr += dma_col_iter_inc;
+	}
+	CUDADMA_BASE::template do_xfer<false,ALIGNMENT> (src_ptr, dst_ptr,
 				(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ?
 				(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) :
 				(thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0));
-  }
+  } 
 public:
   // Public DMA-thread Synchronization Functions
   __device__ __forceinline__ void wait_for_dma_start() const
@@ -1401,22 +1424,22 @@ public:
 
 // The idea behind this version of cudaDMAStrided is to check to see how many warps are
 // required per element and then figure out how many elements can be loaded at a time.
-#define MAX_WARPS_PER_ELMT ((el_sz+(warpSize*MAX_BYTES_OUTSTANDING_PER_THREAD-1))/(warpSize*MAX_BYTES_OUTSTANDING_PER_THREAD))
-#define ELMT_PER_STEP ((num_dma_threads/warpSize+MAX_WARPS_PER_ELMT-1)/MAX_WARPS_PER_ELMT)
-#define ELMT_ID ((CUDADMA_DMA_TID/warpSize)/MAX_WARPS_PER_ELMT)
+#define MAX_WARPS_PER_ELMT ((el_sz+(WARP_SIZE*MAX_BYTES_OUTSTANDING_PER_THREAD-1))/(WARP_SIZE*MAX_BYTES_OUTSTANDING_PER_THREAD))
+#define ELMT_PER_STEP ((num_dma_threads/WARP_SIZE+MAX_WARPS_PER_ELMT-1)/MAX_WARPS_PER_ELMT)
+#define ELMT_ID ((CUDADMA_DMA_TID/WARP_SIZE)/MAX_WARPS_PER_ELMT)
 // For a given elmt, figure out how many warps there are loading it
 // If there is just one element, then all the warps will load it
 // Otherwise all elements get MAX_WARPS_PER_ELMT except the last one which gets the left over warps
-#define WARPS_PER_EL (ELMT_PER_STEP == 1 ? (num_dma_threads/warpSize) : (ELMT_ID < (ELMT_PER_STEP-1) ? MAX_WARPS_PER_ELMT : (num_dma_threads/warpSize) - (ELMT_PER_STEP-1)*MAX_WARPS_PER_ELMT))
-#define CUDADMA_WARP_TID (threadIdx.x - (dma_threadIdx_start + (ELMT_ID*MAX_WARPS_PER_ELMT*warpSize)))
+#define WARPS_PER_EL (ELMT_PER_STEP == 1 ? (num_dma_threads/WARP_SIZE) : (ELMT_ID < (ELMT_PER_STEP-1) ? MAX_WARPS_PER_ELMT : (num_dma_threads/WARP_SIZE) - (ELMT_PER_STEP-1)*MAX_WARPS_PER_ELMT))
+#define CUDADMA_WARP_TID (threadIdx.x - (dma_threadIdx_start + (ELMT_ID*MAX_WARPS_PER_ELMT*WARP_SIZE)))
 #define CUDADMASTRIDED_DMA1_ITER_OFFS (ALIGNMENT*CUDADMA_WARP_TID)
-#define CUDADMASTRIDED_DMA2_ITER_OFFS (1*ALIGNMENT*WARPS_PER_EL*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
-#define CUDADMASTRIDED_DMA3_ITER_OFFS (2*ALIGNMENT*WARPS_PER_EL*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
-#define CUDADMASTRIDED_DMA4_ITER_OFFS (3*ALIGNMENT*WARPS_PER_EL*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA2_ITER_OFFS (1*ALIGNMENT*WARPS_PER_EL*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA3_ITER_OFFS (2*ALIGNMENT*WARPS_PER_EL*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA4_ITER_OFFS (3*ALIGNMENT*WARPS_PER_EL*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)
 #define CUDADMASTRIDED_DMA1_OFFS (ALIGNMENT*CUDADMA_WARP_TID)	
-#define CUDADMASTRIDED_DMA2_OFFS (1*ALIGNMENT*WARPS_PER_EL*warpSize + ALIGNMENT*CUDADMA_WARP_TID)	
-#define CUDADMASTRIDED_DMA3_OFFS (2*ALIGNMENT*WARPS_PER_EL*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
-#define CUDADMASTRIDED_DMA4_OFFS (3*ALIGNMENT*WARPS_PER_EL*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA2_OFFS (1*ALIGNMENT*WARPS_PER_EL*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)	
+#define CUDADMASTRIDED_DMA3_OFFS (2*ALIGNMENT*WARPS_PER_EL*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMASTRIDED_DMA4_OFFS (3*ALIGNMENT*WARPS_PER_EL*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)
 
 template<int ALIGNMENT>
 class cudaDMAStrided<0,ALIGNMENT> : public CUDADMA_BASE
@@ -1462,16 +1485,16 @@ public:
 			CUDADMASTRIDED_DMA3_OFFS,
 			CUDADMASTRIDED_DMA4_OFFS),
 		el_sz (el_sz),	
-		dma_col_iters ((el_sz-4)/(MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_EL*warpSize)),
-		dma_col_iter_inc (MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_EL*warpSize),
+		dma_col_iters ((el_sz-4)/(MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_EL*WARP_SIZE)),
+		dma_col_iter_inc (MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_EL*WARP_SIZE),
 		dma_row_iters (el_cnt/ELMT_PER_STEP + (ELMT_ID<(el_cnt%ELMT_PER_STEP) ? 1 : 0)),
 		dma_src_row_iter_inc (el_stride*ELMT_PER_STEP),
 		dma_dst_row_iter_inc (el_sz*ELMT_PER_STEP),
 		dma_src_offset (ELMT_ID*el_stride),
 		dma_dst_offset (ELMT_ID*el_sz)
 	{
-		int num_vec_loads  = el_sz / (ALIGNMENT*WARPS_PER_EL*warpSize);
-		int leftover_bytes = el_sz % (ALIGNMENT*WARPS_PER_EL*warpSize);
+		int num_vec_loads  = el_sz / (ALIGNMENT*WARPS_PER_EL*WARP_SIZE);
+		int leftover_bytes = el_sz % (ALIGNMENT*WARPS_PER_EL*WARP_SIZE);
 
 		if (leftover_bytes==0)
 		{
@@ -1534,16 +1557,16 @@ public:
 			CUDADMASTRIDED_DMA3_OFFS,
 			CUDADMASTRIDED_DMA4_OFFS),
 		el_sz (el_sz),	
-		dma_col_iters ((el_sz-4)/(MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_EL*warpSize)),
-		dma_col_iter_inc (MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_EL*warpSize),
+		dma_col_iters ((el_sz-4)/(MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_EL*WARP_SIZE)),
+		dma_col_iter_inc (MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_EL*WARP_SIZE),
 		dma_row_iters (el_cnt/ELMT_PER_STEP + (ELMT_ID<(el_cnt%ELMT_PER_STEP) ? 1 : 0)),
 		dma_src_row_iter_inc (src_stride*ELMT_PER_STEP),
 		dma_dst_row_iter_inc (dst_stride*ELMT_PER_STEP),
 		dma_src_offset (ELMT_ID*src_stride),
 		dma_dst_offset (ELMT_ID*dst_stride)
 	{
-		int num_vec_loads  = el_sz / (ALIGNMENT*WARPS_PER_EL*warpSize);
-		int leftover_bytes = el_sz % (ALIGNMENT*WARPS_PER_EL*warpSize);
+		int num_vec_loads  = el_sz / (ALIGNMENT*WARPS_PER_EL*WARP_SIZE);
+		int leftover_bytes = el_sz % (ALIGNMENT*WARPS_PER_EL*WARP_SIZE);
 
 		if (leftover_bytes==0)
 		{
@@ -1619,9 +1642,11 @@ public:
 		  }
 		  break;
 	        }
+#ifdef CUDADMA_DEBUG_ON
 	      default:
 	        printf("ALIGNMENT must be one of (4,8,16)\n");
 		break;
+#endif
 	    }
 	  // Now handle the column leftovers
 	  CUDADMA_BASE::template do_xfer<false,ALIGNMENT> (src_temp, dst_temp,
@@ -1997,9 +2022,11 @@ private: // Helper methods
 		  }
 		  break;
 		}
+#ifdef CUDADMA_DEBUG_ON
 	      default:
 		printf("ALIGNMENT must be one of (4,8,16)\n");
 		break;
+#endif
 	    }
 	  // Now handle the column leftovers
 	  CUDADMA_BASE::template do_xfer<false,ALIGNMENT> (src_temp, dst_temp,
@@ -2046,9 +2073,11 @@ private: // Helper methods
 			(*((float4*)(dst_side_ptr))) = temp;
 			break;
 		      }
+#ifdef CUDADMA_DEBUG_ON
 		    default:
 		      printf("Warning CUDA_DMA internal error, invalid side xfer size: %d\n",XFER_SIZE);
 		      break;
+#endif
 		  }	
 		// Get ready for the next transfer
 		src_side_ptr += side_src_iter_inc;
@@ -2120,9 +2149,11 @@ private: // Helper methods
 		}
 		break;
 	      }
+#ifdef CUDADMA_DEBUG_ON
 	    default:
 	      printf("Warning CUDA_DMA internal error, invalid side xfer size: %d\n", SIDE_XFER_SIZE);
 	      break;
+#endif
 	  } 
   }
 public:
@@ -2188,6 +2219,7 @@ class cudaDMACustom : public CUDADMA_BASE {
 #undef MAX_BYTES_OUTSTANDING_PER_THREAD
 #undef MAX_LDS_OUTSTANDING_PER_THREAD
 #undef CUDADMA_DMA_TID
+#undef WARP_SIZE
 
 // EOF
 

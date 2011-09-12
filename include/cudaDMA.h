@@ -1688,35 +1688,41 @@ public:
 #undef CUDADMASTRIDED_DMA4_OFFS
 #endif // Old cudaDMAStrided
 
+//#define MAX_BYTES_PER_ROW  (CORNERS ? (MAX_DIMX+2*RADIUS)*int(sizeof(ELMT_TYPE)) : MAX_DIMX*int(sizeof(ELMT_TYPE)))
 #define ROW_BYTES (CORNERS ? (dimx+2*RADIUS)*int(sizeof(ELMT_TYPE)) : dimx*int(sizeof(ELMT_TYPE)))
-#define MAX_WARPS_PER_ROW ((ROW_BYTES+(warpSize*MAX_BYTES_OUTSTANDING_PER_THREAD-1))/(warpSize*MAX_BYTES_OUTSTANDING_PER_THREAD))
-#define ROWS_PER_STEP ((num_dma_threads/warpSize+MAX_WARPS_PER_ROW-1)/MAX_WARPS_PER_ROW)
-#define ROW_ID ((CUDADMA_DMA_TID/warpSize)/MAX_WARPS_PER_ROW)
+//#define MAX_WARPS_PER_ROW ((MAX_BYTES_PER_ROW+(WARP_SIZE*MAX_BYTES_OUTSTANDING_PER_THEAD-1))/(WARP_SIZE*MAX_BYTES_OUSTANDING_PER_THREAD))
+#define MAX_WARPS_PER_ROW ((ROW_BYTES+(WARP_SIZE*MAX_BYTES_OUTSTANDING_PER_THREAD-1))/(WARP_SIZE*MAX_BYTES_OUTSTANDING_PER_THREAD))
+#define ROWS_PER_STEP ((num_dma_threads/WARP_SIZE+MAX_WARPS_PER_ROW-1)/MAX_WARPS_PER_ROW)
+#define ROW_ID ((CUDADMA_DMA_TID/WARP_SIZE)/MAX_WARPS_PER_ROW)
 // For a given row, figure out how many warps there are loading it
 // There will always be at least 2 rows
-#define WARPS_PER_ROW (ROWS_PER_STEP == 1 ? (num_dma_threads/warpSize) : (ROW_ID < (ROWS_PER_STEP-1) ? MAX_WARPS_PER_ROW : (num_dma_threads/warpSize) - (ROWS_PER_STEP-1)*MAX_WARPS_PER_ROW))
-#define CUDADMA_WARP_TID (threadIdx.x - (dma_threadIdx_start + (ROW_ID*MAX_WARPS_PER_ROW*warpSize)))
+#define WARPS_PER_ROW (ROWS_PER_STEP == 1 ? (num_dma_threads/WARP_SIZE) : (ROW_ID < (ROWS_PER_STEP-1) ? MAX_WARPS_PER_ROW : (num_dma_threads/WARP_SIZE) - (ROWS_PER_STEP-1)*MAX_WARPS_PER_ROW))
+//#define WARPS_PER_ROW ((MAX_WARPS_PER_ROW >= (num_dma_threads/WARP_SIZE)) ? (num_dma_threads/WARP_SIZE) : \
+	(num_dma_threads/WARP_SIZE)>(MAX_WARPS_PER_ROW*2*RADIUS) ?  (num_dma_threads/WARP_SIZE)/(2*RADIUS) : MAX_WARPS_PER_ROW)
+//#define ROWS_PER_STEP ((num_dma_threads/WARP_SIZE)/WARPS_PER_ROW)
+//#define ROW_ID ((CUDADMA_DMA_TID/WARP_SIZE)/WARPS_PER_ROW)
+#define CUDADMA_WARP_TID (threadIdx.x - (dma_threadIdx_start + (ROW_ID*MAX_WARPS_PER_ROW*WARP_SIZE)))
 #define CUDADMAHALO_DMA1_ITER_OFFS (ALIGNMENT*CUDADMA_WARP_TID)
-#define CUDADMAHALO_DMA2_ITER_OFFS (1*ALIGNMENT*WARPS_PER_ROW*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
-#define CUDADMAHALO_DMA3_ITER_OFFS (2*ALIGNMENT*WARPS_PER_ROW*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
-#define CUDADMAHALO_DMA4_ITER_OFFS (3*ALIGNMENT*WARPS_PER_ROW*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMAHALO_DMA2_ITER_OFFS (1*ALIGNMENT*WARPS_PER_ROW*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMAHALO_DMA3_ITER_OFFS (2*ALIGNMENT*WARPS_PER_ROW*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMAHALO_DMA4_ITER_OFFS (3*ALIGNMENT*WARPS_PER_ROW*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)
 #define CUDADMAHALO_DMA1_OFFS (ALIGNMENT*CUDADMA_WARP_TID)	
-#define CUDADMAHALO_DMA2_OFFS (1*ALIGNMENT*WARPS_PER_ROW*warpSize + ALIGNMENT*CUDADMA_WARP_TID)	
-#define CUDADMAHALO_DMA3_OFFS (2*ALIGNMENT*WARPS_PER_ROW*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
-#define CUDADMAHALO_DMA4_OFFS (3*ALIGNMENT*WARPS_PER_ROW*warpSize + ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMAHALO_DMA2_OFFS (1*ALIGNMENT*WARPS_PER_ROW*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)	
+#define CUDADMAHALO_DMA3_OFFS (2*ALIGNMENT*WARPS_PER_ROW*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)
+#define CUDADMAHALO_DMA4_OFFS (3*ALIGNMENT*WARPS_PER_ROW*WARP_SIZE+ ALIGNMENT*CUDADMA_WARP_TID)
 // We also need to figure out how many loads need to be performed for the sides
 // Figure out the biggest size loads we can perform for a given radius and alignment
 #define SIDE_BYTES (RADIUS*int(sizeof(ELMT_TYPE)))
 // This value should be statically determined 
 #define SIDE_XFER_SIZE ((SIDE_BYTES%ALIGNMENT)==0 ? ALIGNMENT : (SIDE_BYTES%(ALIGNMENT/2))==0 ? ALIGNMENT/2 : ALIGNMENT/4)
 #define TOTAL_SIDE_LOADS (SIDE_BYTES/SIDE_XFER_SIZE)
-// We want threads per side to be a multiple of 2 so it should divide evenly into warpSize
+// We want threads per side to be a multiple of 2 so it should divide evenly into WARP_SIZE 
 #define THREADS_PER_SIDE ((TOTAL_SIDE_LOADS==1) ? 1 : (TOTAL_SIDE_LOADS==2) ? 2 : (TOTAL_SIDE_LOADS<=4) ? 4 : (TOTAL_SIDE_LOADS<=8) ? 8 : (TOTAL_SIDE_LOADS<=16) ? 16 : 32)
 // Total number of sides that can be handled by a warp, each thread can handle MAX_LDS_OUTSTANDING sides 
-#define SIDES_PER_WARP (warpSize/THREADS_PER_SIDE)*MAX_LDS_OUTSTANDING_PER_THREAD
+#define SIDES_PER_WARP (WARP_SIZE/THREADS_PER_SIDE)*MAX_LDS_OUTSTANDING_PER_THREAD
 // The remaining warps after the warps have been allocated to the rows
-#define REMAINING_WARPS ((num_dma_threads/warpSize) > (2*RADIUS*MAX_WARPS_PER_ROW) ? \
-				(num_dma_threads/warpSize) - (2*RADIUS)*MAX_WARPS_PER_ROW : 0)
+#define REMAINING_WARPS ((num_dma_threads/WARP_SIZE) > (2*RADIUS*MAX_WARPS_PER_ROW) ? \
+				(num_dma_threads/WARP_SIZE) - (2*RADIUS)*MAX_WARPS_PER_ROW : 0)
 
 // Asserting sizeof(ELMT_TYPE) <= ALIGNMENT
 // Asserting (RADIUS*sizeof(ELMT_TYPE))%ALIGNMENT==0
@@ -1750,6 +1756,7 @@ private:
 	// Optimizations for different loading techniques
 	const bool split; // If we split warps into row warps and side warps
 	const bool optimized; // If everything can be loaded in one step, pre-load into registers
+	const bool all_threads_active; // Check if all row threads are active for the optmized case
 	const bool row_thread; // true if responsible for loading rows, otherwise a side thread in split cases
 public:
   __device__ cudaDMAHalo (const int dmaID,
@@ -1780,8 +1787,8 @@ public:
 			CUDADMAHALO_DMA3_OFFS,
 			CUDADMAHALO_DMA4_OFFS),	
 		row_sz (ROW_BYTES),
-		dma_col_iters ((ROW_BYTES-4)/(MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_ROW*warpSize)),
-		dma_col_iter_inc (MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_ROW*warpSize),
+		dma_col_iters ((ROW_BYTES-4)/(MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_ROW*WARP_SIZE)),
+		dma_col_iter_inc (MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_ROW*WARP_SIZE),
 		dma_row_id (ROW_ID),	
 		dma_row_iters (ROWS_PER_STEP),
 		dma_src_row_iter_inc (pitch*sizeof(ELMT_TYPE)),
@@ -1796,6 +1803,7 @@ public:
 						(dimy*(dimx+2*RADIUS)*sizeof(ELMT_TYPE))),
 		split (REMAINING_WARPS>0),	
 		optimized ((REMAINING_WARPS>0) && ((REMAINING_WARPS*SIDES_PER_WARP)>=2*dimy)),
+		all_threads_active (ROW_BYTES % (ALIGNMENT*WARPS_PER_ROW*WARP_SIZE) == 0),
 		row_thread (ROW_ID<(2*RADIUS))
 	{
 		if (REMAINING_WARPS>0)
@@ -1805,22 +1813,26 @@ public:
 			if (!(ROW_ID<(2*RADIUS)))
 			{
 				int local_id = threadIdx.x - (dma_threadIdx_start + num_dma_threads 
-									- (REMAINING_WARPS*warpSize));	
+									- (REMAINING_WARPS*WARP_SIZE));	
 				side_id = local_id/THREADS_PER_SIDE;
 				side_load = local_id%THREADS_PER_SIDE;
 				side_active = (side_load < TOTAL_SIDE_LOADS) && (side_id < (2*dimy));
-				side_src_iter_inc = ((REMAINING_WARPS*warpSize/THREADS_PER_SIDE)/2)*pitch*sizeof(ELMT_TYPE);
-				side_dst_iter_inc = ((REMAINING_WARPS*warpSize/THREADS_PER_SIDE)/2)*(2*RADIUS+dimx)*sizeof(ELMT_TYPE);
+				side_src_iter_inc = ((REMAINING_WARPS*WARP_SIZE/THREADS_PER_SIDE)/2)*pitch*sizeof(ELMT_TYPE);
+				side_dst_iter_inc = ((REMAINING_WARPS*WARP_SIZE/THREADS_PER_SIDE)/2)*(2*RADIUS+dimx)*sizeof(ELMT_TYPE);
 				side_src_offset = (side_id%2 ? dimx*sizeof(ELMT_TYPE)+side_load*SIDE_XFER_SIZE 
 							: -(TOTAL_SIDE_LOADS-side_load)*SIDE_XFER_SIZE) + (side_id/2)*pitch*sizeof(ELMT_TYPE);
 				side_dst_offset = (side_id%2 ? dimx*sizeof(ELMT_TYPE)+side_load*SIDE_XFER_SIZE 
 							: -(TOTAL_SIDE_LOADS-side_load)*SIDE_XFER_SIZE) + (side_id/2)*(2*RADIUS+dimx)*sizeof(ELMT_TYPE);
-				side_iters = (2*dimy - side_id + (REMAINING_WARPS*warpSize/THREADS_PER_SIDE)-1)/(REMAINING_WARPS*warpSize/THREADS_PER_SIDE);
+				int temp_side_iters = 2*dimy - side_id + (REMAINING_WARPS*WARP_SIZE/THREADS_PER_SIDE) - 1;
+				int temp_side_iters2 = REMAINING_WARPS*WARP_SIZE/THREADS_PER_SIDE;
+				side_iters = temp_side_iters/temp_side_iters2;
+				// For some reason the following line causes the compiler to seg-fault
+				//side_iters = temp_side_iters/(REMAINING_WARPS*WARP_SIZE/THREADS_PER_SIDE);
 			}
 			else // These are the row threads, finish computing their bytes
 			{
-				int num_vec_loads  = ROW_BYTES / (ALIGNMENT*WARPS_PER_ROW*warpSize);
-				int leftover_bytes = ROW_BYTES % (ALIGNMENT*WARPS_PER_ROW*warpSize);
+				int num_vec_loads  = ROW_BYTES / (ALIGNMENT*WARPS_PER_ROW*WARP_SIZE);
+				int leftover_bytes = ROW_BYTES % (ALIGNMENT*WARPS_PER_ROW*WARP_SIZE);
 
 				if (leftover_bytes==0)
 					thread_bytes = num_vec_loads*ALIGNMENT;
@@ -1861,8 +1873,8 @@ public:
 							: -(TOTAL_SIDE_LOADS-side_load)*SIDE_XFER_SIZE) + (side_id/2)*(2*RADIUS+dimx)*sizeof(ELMT_TYPE);
 
 			// Finally set up the row information
-			int num_vec_loads  = ROW_BYTES / (ALIGNMENT*WARPS_PER_ROW*warpSize);
-			int leftover_bytes = ROW_BYTES % (ALIGNMENT*WARPS_PER_ROW*warpSize);
+			int num_vec_loads  = ROW_BYTES / (ALIGNMENT*WARPS_PER_ROW*WARP_SIZE);
+			int leftover_bytes = ROW_BYTES % (ALIGNMENT*WARPS_PER_ROW*WARP_SIZE);
 
 			if (leftover_bytes==0)
 				thread_bytes = num_vec_loads*ALIGNMENT;
@@ -1923,11 +1935,17 @@ public:
 		// so we can do some optimizations like pre-loading into registers
 		if (row_thread) // These are the row loader threads
 		{
-			// I should be able to comment out wait for start here and then make the DO_SYNC parameter true, but the compiler fails
-			CUDADMA_BASE::wait_for_dma_start();
 			char *src_row_ptr = ((char*)src_origin) + (dma_row_id<RADIUS ? dma_src_top_offset + (dma_row_id*dma_src_row_iter_inc) : dma_src_bot_offset + (dma_row_id-RADIUS)*dma_src_row_iter_inc);
 			char *dst_row_ptr = ((char*)dst_origin) + (dma_row_id<RADIUS ? dma_dst_top_offset + (dma_row_id*dma_dst_row_iter_inc) : dma_dst_bot_offset + (dma_row_id-RADIUS)*dma_dst_row_iter_inc);
-			load_rows_opt<false>(src_row_ptr, dst_row_ptr);	
+			if (all_threads_active)
+			{
+				load_rows_opt<true>(src_row_ptr,dst_row_ptr);
+			}
+			else
+			{
+				CUDADMA_BASE::wait_for_dma_start();
+				load_rows_opt<false>(src_row_ptr, dst_row_ptr);	
+			}
 		}
 		else // These are the side loader threads
 		{
@@ -1988,37 +2006,74 @@ private: // Helper methods
   {
 	char * src_temp = src_row_ptr;
 	char * dst_temp = dst_row_ptr;
-	for ( ; row_id<MAX_ROW; row_id+=dma_row_iters)
-	{
 	  switch(ALIGNMENT)
 	    {
 	      case 4:
 		{
-		  for (int j=0; j < dma_col_iters; j++)
+		  for ( ; row_id < MAX_ROW; row_id += dma_row_iters)
 		  {
-		    CUDADMA_BASE::template perform_four_xfers<float,float,false,false> (src_temp,dst_temp);
-		    src_temp += dma_col_iter_inc;
-		    dst_temp += dma_col_iter_inc;
+		    for (int j=0; j < dma_col_iters; j++)
+		    {
+		      CUDADMA_BASE::template perform_four_xfers<float,float,false,false> (src_temp,dst_temp);
+		      src_temp += dma_col_iter_inc;
+		      dst_temp += dma_col_iter_inc;
+		    }
+		    // Handle the leftovers
+		    CUDADMA_BASE::template do_xfer<false,ALIGNMENT> (src_temp, dst_temp,
+			(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ?
+			(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) :
+			(thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0));
+		    // Now set up for the next row
+	  	    src_row_ptr += (dma_row_iters*dma_src_row_iter_inc);
+	  	    src_temp = src_row_ptr;
+	  	    dst_row_ptr += (dma_row_iters*dma_dst_row_iter_inc);
+	  	    dst_temp = dst_row_ptr;
 		  }
 		  break;
 		}
 	      case 8:
 		{
-		  for (int j=0; j < dma_col_iters; j++)
+		  for ( ; row_id < MAX_ROW; row_id += dma_row_iters)
 		  {
-		    CUDADMA_BASE::template perform_four_xfers<float2,float2,false,false> (src_temp,dst_temp);	
-		    src_temp += dma_col_iter_inc;
-		    dst_temp += dma_col_iter_inc;
+		    for (int j=0; j < dma_col_iters; j++)
+		    {
+		      CUDADMA_BASE::template perform_four_xfers<float2,float2,false,false> (src_temp,dst_temp);	
+		      src_temp += dma_col_iter_inc;
+		      dst_temp += dma_col_iter_inc;
+		    }
+		    // Now handle the column leftovers
+	  	    CUDADMA_BASE::template do_xfer<false,ALIGNMENT> (src_temp, dst_temp,
+			(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ?
+			(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) :
+			(thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0));
+	  	    // Now set up for the next row
+	  	    src_row_ptr += (dma_row_iters*dma_src_row_iter_inc);
+	  	    src_temp = src_row_ptr;
+	  	    dst_row_ptr += (dma_row_iters*dma_dst_row_iter_inc);
+	  	    dst_temp = dst_row_ptr;
 		  }
 		  break;
 		}
 	      case 16:
 		{
-		  for (int j=0; j < dma_col_iters; j++)
+		  for ( ; row_id < MAX_ROW; row_id += dma_row_iters)
 		  {
-		    CUDADMA_BASE::template perform_four_xfers<float4,float4,false,false> (src_temp,dst_temp);
-		    src_temp += dma_col_iter_inc;
-		    dst_temp += dma_col_iter_inc;
+		    for (int j=0; j < dma_col_iters; j++)
+		    {
+		      CUDADMA_BASE::template perform_four_xfers<float4,float4,false,false> (src_temp,dst_temp);
+		      src_temp += dma_col_iter_inc;
+		      dst_temp += dma_col_iter_inc;
+		    }
+		    // Now handle the column leftovers
+	  	    CUDADMA_BASE::template do_xfer<false,ALIGNMENT> (src_temp, dst_temp,
+			(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ?
+			(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) :
+			(thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0));
+	  	    // Now set up for the next row
+	  	    src_row_ptr += (dma_row_iters*dma_src_row_iter_inc);
+	  	    src_temp = src_row_ptr;
+	  	    dst_row_ptr += (dma_row_iters*dma_dst_row_iter_inc);
+	  	    dst_temp = dst_row_ptr;
 		  }
 		  break;
 		}
@@ -2028,17 +2083,6 @@ private: // Helper methods
 		break;
 #endif
 	    }
-	  // Now handle the column leftovers
-	  CUDADMA_BASE::template do_xfer<false,ALIGNMENT> (src_temp, dst_temp,
-			(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ?
-			(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) :
-			(thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0));
-	  // Now set up for the next row
-	  src_row_ptr += (dma_row_iters*dma_src_row_iter_inc);
-	  src_temp = src_row_ptr;
-	  dst_row_ptr += (dma_row_iters*dma_dst_row_iter_inc);
-	  dst_temp = dst_row_ptr;
-	}
   }
   template<bool DO_SYNC>
   __device__ __forceinline__ void load_rows_opt(char *src_row_ptr, char *dst_row_ptr) const
@@ -2051,38 +2095,47 @@ private: // Helper methods
   template<int XFER_SIZE>
   __device__ __forceinline__ void load_sides(char * src_side_ptr, char * dst_side_ptr) const
   {
-	for (int i = 0; i < side_iters; i++)
-	{
-		switch (XFER_SIZE)
-		  {
-		    case 4:
-		      {
+	switch (XFER_SIZE)
+	  {
+	    case 4:
+	      {
+		for (int i = 0; i < side_iters; i++)
+		{
 			float temp = (*((float*)(src_side_ptr)));
 			(*((float*)(dst_side_ptr))) = temp;
-			break;
-		      }
-		    case 8:
-		      {
+			src_side_ptr += side_src_iter_inc;
+			dst_side_ptr += side_dst_iter_inc;
+		}
+		break;
+	      }
+	    case 8:
+	      {
+		for (int i = 0; i < side_iters; i++)
+		{
 			float2 temp = (*((float2*)(src_side_ptr)));
 			(*((float2*)(dst_side_ptr))) = temp;	
-			break;
-		      }
-		    case 16:
-		      {
+			src_side_ptr += side_src_iter_inc;
+			dst_side_ptr += side_dst_iter_inc;
+		}
+		break;
+	      }
+	    case 16:
+	      {
+		for (int i = 0; i < side_iters; i++)
+		{
 			float4 temp = (*((float4*)(src_side_ptr)));
 			(*((float4*)(dst_side_ptr))) = temp;
-			break;
-		      }
+			src_side_ptr += side_src_iter_inc;
+			dst_side_ptr += side_dst_iter_inc;
+		}
+		break;
+	      }
 #ifdef CUDADMA_DEBUG_ON
-		    default:
-		      printf("Warning CUDA_DMA internal error, invalid side xfer size: %d\n",XFER_SIZE);
-		      break;
+	    default:
+	      printf("Warning CUDA_DMA internal error, invalid side xfer size: %d\n",XFER_SIZE);
+	      break;
 #endif
-		  }	
-		// Get ready for the next transfer
-		src_side_ptr += side_src_iter_inc;
-		dst_side_ptr += side_dst_iter_inc;
-	}
+	  }	
   }
   template<int XFER_SIZE>
   __device__ __forceinline__ void load_sides_opt(char * src_side_ptr, char * dst_side_ptr) const
@@ -2167,6 +2220,7 @@ public:
     CUDADMA_BASE::finish_async_dma();
   }
 };
+//#undef MAX_BYTES_PER_ROW
 #undef ROW_BYTES
 #undef MAX_WARPS_PER_ROW
 #undef ROWS_PER_STEP

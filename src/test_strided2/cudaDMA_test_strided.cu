@@ -29,7 +29,10 @@
 #include "cuda.h"
 #include "cuda_runtime.h"
 
+//#define CUDADMA_DEBUG_ON
 #include "../../include/cudaDMA.h"
+
+#include "params_directed.h"
 
 #define WARP_SIZE 32
 
@@ -50,21 +53,27 @@
 // I hate global variables, but whatever
 long total_experiments = 0;
 
-template<int ALIGNMENT, int ALIGN_OFFSET, int MAX_BYTES_PER_ELMT>
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS>
 __global__ void __launch_bounds__(1024,1)
-dma_ld_test ( float *idata, float *odata, int element_size /*in number of floats*/, int num_elements, int src_stride/*bytes*/, int dst_stride/*bytes*/, int buffer_size /*number of floats*/, int num_compute_threads, int num_dma_threads_per_ld)
+dma_ld_test ( float *idata, float *odata, int src_stride/*bytes*/, int dst_stride/*bytes*/, int buffer_size /*number of floats*/, int num_compute_threads)
 {
 	extern __shared__ float buffer[];	
 
-	cudaDMAStrided<MAX_BYTES_PER_ELMT,ALIGNMENT>
-	  dma0 (1, num_dma_threads_per_ld, num_compute_threads,
-		num_compute_threads, element_size*sizeof(float),
-		num_elements, src_stride*sizeof(float), dst_stride*sizeof(float));
+	cudaDMAStrided<BYTES_PER_ELMT,NUM_ELMTS,ALIGNMENT,DMA_THREADS>
+	  dma0 (1, num_compute_threads,
+		num_compute_threads,
+		src_stride,
+		dst_stride);
 
 	if (dma0.owns_this_thread())
 	{
 		float *base_ptr = &(idata[ALIGN_OFFSET]);
+#ifdef CUDADMA_DEBUG_ON
+		dma0.wait_for_dma_start();
+		dma0.finish_async_dma();
+#else
 		dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+#endif
 	}
 	else
 	{
@@ -96,21 +105,19 @@ dma_ld_test ( float *idata, float *odata, int element_size /*in number of floats
 	}
 }	
 
-template<int ALIGNMENT, int ALIGN_OFFSET>
-__host__ bool run_experiment(int element_size, int element_count,
-			 	int src_stride, int dst_stride,
-				int dma_warps)
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS>
+__host__ bool run_experiment(int src_stride /*in floats*/, int dst_stride/*in floats*/)
 {
 	// check some assertions
-	assert(element_size <= src_stride);
-	assert(element_size <= dst_stride);
-	int shared_buffer_size = (element_count*dst_stride + ALIGN_OFFSET);
+	assert(BYTES_PER_ELMT <= src_stride*sizeof(float));
+	assert(BYTES_PER_ELMT <= dst_stride*sizeof(float));
+	int shared_buffer_size = (NUM_ELMTS*dst_stride + ALIGN_OFFSET);
 	// Check to see if we're using more shared memory than there is, if so return
 	if ((shared_buffer_size*sizeof(float)) > 49152)
 		return true;
 
 	// Allocate the inpute data
-	int input_size = (element_count*src_stride+ALIGN_OFFSET);
+	int input_size = (NUM_ELMTS*src_stride+ALIGN_OFFSET);
 	float *h_idata = (float*)malloc(input_size*sizeof(float));
 	for (int i=0; i<input_size; i++)
 		h_idata[i] = float(i);
@@ -120,7 +127,7 @@ __host__ bool run_experiment(int element_size, int element_count,
 	CUDA_SAFE_CALL( cudaMemcpy( d_idata, h_idata, input_size*sizeof(float), cudaMemcpyHostToDevice));
 
 	// Allocate the output size
-	int output_size = (element_count*dst_stride+ALIGN_OFFSET);
+	int output_size = (NUM_ELMTS*dst_stride+ALIGN_OFFSET);
 	float *h_odata = (float*)malloc(output_size*sizeof(float));
 	for (int i=0; i<output_size; i++)
 		h_odata[i] = 0.0f;
@@ -130,97 +137,28 @@ __host__ bool run_experiment(int element_size, int element_count,
 	CUDA_SAFE_CALL( cudaMemcpy( d_odata, h_odata, output_size*sizeof(float), cudaMemcpyHostToDevice));
 
 	int num_compute_warps = 1;
-	int total_threads = (num_compute_warps + dma_warps)*WARP_SIZE;
+	int total_threads = (num_compute_warps)*WARP_SIZE + DMA_THREADS;
 
-	int elem_bytes = element_size*sizeof(float);
-	if (elem_bytes <= 64)
-	{
-		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,64>
-			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-			(d_idata, d_odata, element_size, element_count, src_stride,
-			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
-			 dma_warps*WARP_SIZE);
-	}
-	else if (elem_bytes <= 128)
-	{
-		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,128>
-			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-			(d_idata, d_odata, element_size, element_count, src_stride,
-			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
-			 dma_warps*WARP_SIZE);
-	}
-	else if (elem_bytes <= 256)
-	{
-		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,256>
-			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-			(d_idata, d_odata, element_size, element_count, src_stride,
-			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
-			 dma_warps*WARP_SIZE);
-	}
-	else if (elem_bytes <= 512)
-	{
-		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,512>
-			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-			(d_idata, d_odata, element_size, element_count, src_stride,
-			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
-			 dma_warps*WARP_SIZE);
-	}
-	else if (elem_bytes <= 1024)
-	{
-		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,1024>
-			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-			(d_idata, d_odata, element_size, element_count, src_stride,
-			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
-			 dma_warps*WARP_SIZE);
-	}
-	else if (elem_bytes <= 2048)
-	{
-		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,2048>
-			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-			(d_idata, d_odata, element_size, element_count, src_stride,
-			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
-			 dma_warps*WARP_SIZE);
-	}
-	else if (elem_bytes <= 4096)
-	{
-		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,4096>
-			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-			(d_idata, d_odata, element_size, element_count, src_stride,
-			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
-			 dma_warps*WARP_SIZE);
-	}
-	else if (elem_bytes <= 8192)
-	{
-		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,8192>
-			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-			(d_idata, d_odata, element_size, element_count, src_stride,
-			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
-			 dma_warps*WARP_SIZE);
-	}
-	else
-	{
-		dma_ld_test<ALIGNMENT,ALIGN_OFFSET,0>
-			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-			(d_idata, d_odata, element_size, element_count, src_stride,
-			 dst_stride, shared_buffer_size, num_compute_warps*WARP_SIZE,
-			 dma_warps*WARP_SIZE);
-	}
+	dma_ld_test<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,DMA_THREADS>
+		<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+		(d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, num_compute_warps*WARP_SIZE);
+
 	CUDA_SAFE_CALL( cudaThreadSynchronize());
 
 	CUDA_SAFE_CALL( cudaMemcpy (h_odata, d_odata, output_size*sizeof(float), cudaMemcpyDeviceToHost));
 
 	// Check the result
 	bool pass = true;
-	for (int i=0; i<element_count && pass; i++)
+	for (int i=0; i<NUM_ELMTS && pass; i++)
 	{
 		int in_index = ALIGN_OFFSET+i*src_stride;
 		int out_index = ALIGN_OFFSET+i*dst_stride;
-		for (int j=0; j<element_size; j++)
+		for (int j=0; j<(BYTES_PER_ELMT/sizeof(float)); j++)
 		{
 			//printf("%f ",h_odata[out_index+j]);
 			if (h_idata[in_index+j] != h_odata[out_index+j])
 			{
-				fprintf(stderr,"Experiment: %ld element bytes, %d elements, %ld source stride, %ld destination stride, %d DMA warps, %d alignment, %d offset, ",element_size*sizeof(float),element_count,src_stride*sizeof(float),dst_stride*sizeof(float),dma_warps,ALIGNMENT,ALIGN_OFFSET);
+				fprintf(stderr,"Experiment: %d element bytes, %d elements, %ld source stride, %ld destination stride, %d DMA warps, %d alignment, %d offset, ",BYTES_PER_ELMT,NUM_ELMTS,src_stride*sizeof(float),dst_stride*sizeof(float),DMA_THREADS/WARP_SIZE,ALIGNMENT,ALIGN_OFFSET);
 				fprintf(stderr,"Index %d of element %d was expecting %f but received %f\n", j, i, h_idata[in_index+j], h_odata[out_index+j]);
 				pass = false;
 				break;
@@ -245,6 +183,7 @@ __host__ bool run_experiment(int element_size, int element_count,
 	return pass;
 }
 
+#if 0
 template<int ALIGNMENT, int ALIGN_OFFSET>
 __host__
 bool run_all_experiments(int max_element_size, int max_element_count,
@@ -291,10 +230,425 @@ bool run_all_experiments(int max_element_size, int max_element_count,
 	}
 	return pass;
 }
+#endif
+
+
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS>
+__host__
+void run_all_dma_warps(bool &result)
+{
+	assert(BYTES_PER_ELMT%sizeof(float)==0);
+	const int element_size = BYTES_PER_ELMT/sizeof(float);
+	const int min_stride = element_size + (element_size%(ALIGNMENT/sizeof(float)) ? 
+					((ALIGNMENT/sizeof(float))-(element_size%(ALIGNMENT/sizeof(float)))) : 0);
+	const int warp_size=32;
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,1*warp_size>(min_stride,min_stride);
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,2*warp_size>(min_stride,min_stride);
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,3*warp_size>(min_stride,min_stride);
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,4*warp_size>(min_stride,min_stride);
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,5*warp_size>(min_stride,min_stride);
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,6*warp_size>(min_stride,min_stride);
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,7*warp_size>(min_stride,min_stride);
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,8*warp_size>(min_stride,min_stride);
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,9*warp_size>(min_stride,min_stride);
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,10*warp_size>(min_stride,min_stride);
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,11*warp_size>(min_stride,min_stride);
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,12*warp_size>(min_stride,min_stride);
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,13*warp_size>(min_stride,min_stride);
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,14*warp_size>(min_stride,min_stride);
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,15*warp_size>(min_stride,min_stride);
+	result = result && run_experiment<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,16*warp_size>(min_stride,min_stride);
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT>
+__host__
+void run_all_num_elements(bool &result)
+{
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,1>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,2>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,3>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,4>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,5>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,6>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,7>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,8>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,9>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,10>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,11>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,12>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,13>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,14>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,15>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,16>(result);
+#if 0
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,17>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,18>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,19>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,20>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,21>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,22>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,23>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,24>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,25>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,26>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,27>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,28>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,29>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,30>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,31>(result);
+	run_all_dma_warps<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT,32>(result);
+#endif
+}
+
+#if 0
+template<int ALIGNMENT, int ALIGN_OFFSET>
+__host__
+bool run_all_experiments()
+{
+	bool result = true;
+	{
+		const int base=0;
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	{
+		const int base=64;
+#if 0
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+#endif
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	{
+		const int base=128;
+#if 0
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+#endif
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	{
+		const int base=192;
+#if 0
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+#endif
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	{
+		const int base=256;
+#if 0
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+#endif
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	{
+		const int base=320;
+#if 0
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+#endif
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	{
+		const int base=384;
+#if 0
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+#endif
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	{
+		const int base=448;
+#if 0
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+#endif
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	{
+		const int base=512;
+#if 0
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+#endif
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	{
+		const int base=576;
+#if 0
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+#endif
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	{
+		const int base=640;
+#if 0
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+#endif
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	{
+		const int base=704;
+#if 0
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+#endif
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	{
+		const int base=768;
+#if 0
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+#endif
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	{
+		const int base=832;
+#if 0
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+#endif
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	{
+		const int base=896;
+#if 0
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+#endif
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	{
+		const int base=960;
+#if 0
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+4>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+8>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+12>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+16>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+20>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+24>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+28>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+32>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+36>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+40>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+44>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+48>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+52>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+56>(result);
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+60>(result);
+#endif
+		run_all_num_elements<ALIGNMENT,ALIGN_OFFSET,base+64>(result);
+	}
+	
+	return result;
+}	
+#endif
 
 __host__
 int main()
 {
+#if 0
 	bool success16_0 = true;
 	bool success08_0 = true;
 	bool success08_2 = true;
@@ -302,18 +656,32 @@ int main()
 	bool success04_1 = true;
 	bool success04_2 = true;
 	bool success04_3 = true;
+#endif
 	// An 8192*sizeof(float) element is almost all of shared memory (can only fit one)
 	// We probably want to test up to 32 elements per stride if we're going to have up to 16 dma warps
-	success16_0 = success16_0 && run_all_experiments<16,0>(8192,32,16);
-	success08_0 = success08_0 && run_all_experiments<8,0>(8192,32,16);
-	success08_2 = success08_2 && run_all_experiments<8,2>(8192,32,16);
-	success04_0 = success04_0 && run_all_experiments<4,0>(8192,32,16);
-	success04_1 = success04_1 && run_all_experiments<4,1>(8192,32,16);
-	success04_2 = success04_2 && run_all_experiments<4,2>(8192,32,16);
-	success04_3 = success04_3 && run_all_experiments<4,3>(8192,32,16);
+	//success16_0 = success16_0 && run_all_experiments<16,0>(8192,32,16);
+	//success08_0 = success08_0 && run_all_experiments<8,0>(8192,32,16);
+	//success08_2 = success08_2 && run_all_experiments<8,2>(8192,32,16);
+	//success04_0 = success04_0 && run_all_experiments<4,0>(8192,32,16);
+	//success04_1 = success04_1 && run_all_experiments<4,1>(8192,32,16);
+	//success04_2 = success04_2 && run_all_experiments<4,2>(8192,32,16);
+	//success04_3 = success04_3 && run_all_experiments<4,3>(8192,32,16);
 
-	//success16_0 = success16_0 && run_experiment<16,0>(513,1,516,516,1);
+#if 1
+	const int element_size = PARAM_ELMT_SIZE/sizeof(float);
+	const int min_stride = element_size + (element_size%(PARAM_ALIGNMENT/sizeof(float)) ? 
+					((PARAM_ALIGNMENT/sizeof(float))-(element_size%(PARAM_ALIGNMENT/sizeof(float)))) : 0);
+	bool result = run_experiment<PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS>(min_stride,min_stride);
+	printf("Experiment: ALIGNMENT-%d OFFSET-%d ELMT_SIZE-%d NUM_ELMTS-%d DMA_WARPS-%d RESULT: %s\n",PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS/32,(result?"SUCCESS":"FAILURE"));
+#else
+	bool result = true;
+	printf("Running all experiments for ALIGNMENT-%d OFFSET-%d ELMT_SIZE-%d... ",PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE);
+	run_all_num_elements<PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE>(result);
+	printf("%s\n",(result?"SUCCESS":"FAILURE"));
+#endif
+	//success16_0 = success16_0 && run_all_experiments<16,0>();
 
+#if 0
 	fprintf(stdout,"\nResults:\n");
 	fprintf(stdout,"\tAlignment16-Offset0: %s\n",(success16_0?"SUCCESS":"FAILURE"));
 	fprintf(stdout,"\tAlignment08-Offset0: %s\n",(success08_0?"SUCCESS":"FAILURE"));
@@ -323,6 +691,7 @@ int main()
 	fprintf(stdout,"\tAlignment04-Offset2: %s\n",(success04_2?"SUCCESS":"FAILURE"));
 	fprintf(stdout,"\tAlignment04-Offset3: %s\n",(success04_3?"SUCCESS":"FAILURE"));
 	fprintf(stdout,"\n\tTotal Experiments - %ld\n", total_experiments);
-	return 0;
+#endif
+	return result;
 }
 

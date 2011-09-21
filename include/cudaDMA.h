@@ -1857,7 +1857,7 @@ public:
 		dma_src_offset (SPLIT_ELMT ? (SPLIT_WARP ? (threadIdx.x%THREADS_PER_ELMT) : (threadIdx.x%WARP_SIZE))*ALIGNMENT : ELMT_ID*el_stride),
 		dma_dst_offset (SPLIT_ELMT ? (SPLIT_WARP ? (threadIdx.x%THREADS_PER_ELMT) : (threadIdx.x%WARP_SIZE))*ALIGNMENT : ELMT_ID*BYTES_PER_ELMT),
 		warp_active (int(ELMT_ID) < ELMT_PER_STEP),
-		warp_partial (NUM_ELMTS==ELMT_PER_STEP ? true : int(ELMT_ID) < (NUM_ELMTS%ELMT_PER_STEP)),
+		warp_partial (NUM_ELMTS==ELMT_PER_STEP ? int(ELMT_ID) < ELMT_PER_STEP : int(ELMT_ID) < (NUM_ELMTS%ELMT_PER_STEP)),
 		dma_split_partial_elmts (PARTIAL_ELMTS)
 	{
 		if (LDS_PER_ELMT_PER_THREAD == 1) // Stripe the warp's loads across MAX_LDS_OUTSTANDING_PER_WARP elements
@@ -2024,7 +2024,7 @@ public:
 		dma_src_offset (SPLIT_ELMT ? (SPLIT_WARP ? (threadIdx.x%THREADS_PER_ELMT) : (threadIdx.x%WARP_SIZE))*ALIGNMENT : ELMT_ID*src_stride),
 		dma_dst_offset (SPLIT_ELMT ? (SPLIT_WARP ? (threadIdx.x%THREADS_PER_ELMT) : (threadIdx.x%WARP_SIZE))*ALIGNMENT : ELMT_ID*dst_stride),
 		warp_active (int(ELMT_ID) < ELMT_PER_STEP),
-		warp_partial (NUM_ELMTS==ELMT_PER_STEP ? true : int(ELMT_ID) < (NUM_ELMTS%ELMT_PER_STEP)),
+		warp_partial (NUM_ELMTS==ELMT_PER_STEP ? int(ELMT_ID) < ELMT_PER_STEP : int(ELMT_ID) < (NUM_ELMTS%ELMT_PER_STEP)),
 		dma_split_partial_elmts (PARTIAL_ELMTS)
 	{
 		if (LDS_PER_ELMT_PER_THREAD == 1) // Stripe the warp's loads across MAX_LDS_OUTSTANDING_PER_WARP elements

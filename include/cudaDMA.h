@@ -1986,7 +1986,7 @@ public:
 #ifdef CUDADMA_DEBUG_ON 
 			if (CUDADMA_BASE::is_dma_thread)
 			{
-				printf("FULL LOAD: DMA id %d: element_id %d  src_offset %d  dst_offset %d  row_iters %d  warps_per_elem %d  thread_bytes %d  col_iters %d  col_iter_inc %d\n",CUDADMA_DMA_TID,ELMT_ID,dma_src_offset,dma_dst_offset,ROW_ITERS_FULL,WARPS_PER_ELMT,thread_bytes, COL_ITERS_SPLIT, dma_col_iter_inc);
+				printf("FULL LOAD: DMA id %d: element_id %d  src_offset %d  dst_offset %d  row_iters %d  warps_per_elem %d  thread_bytes %d  col_iters %d  col_iter_inc %d\n",CUDADMA_DMA_TID,ELMT_ID,dma_src_offset,dma_dst_offset,ROW_ITERS_FULL,WARPS_PER_ELMT,thread_bytes, COL_ITERS_FULL, dma_col_iter_inc);
 			}
 #endif
 
@@ -2153,7 +2153,7 @@ public:
 #ifdef CUDADMA_DEBUG_ON 
 			if (CUDADMA_BASE::is_dma_thread)
 			{
-				printf("FULL LOAD: DMA id %d: element_id %d  src_offset %d  dst_offset %d  row_iters %d  warps_per_elem %d  thread_bytes %d  col_iters %d  col_iter_inc %d active %d partial %d\n",CUDADMA_DMA_TID,ELMT_ID,dma_src_offset,dma_dst_offset,ROW_ITERS_FULL,WARPS_PER_ELMT,thread_bytes, COL_ITERS_SPLIT, dma_col_iter_inc, warp_active, warp_partial);
+				printf("FULL LOAD: DMA id %d: element_id %d  src_offset %d  dst_offset %d  row_iters %d  warps_per_elem %d  thread_bytes %d  col_iters %d  col_iter_inc %d active %d partial %d\n",CUDADMA_DMA_TID,ELMT_ID,dma_src_offset,dma_dst_offset,ROW_ITERS_FULL,WARPS_PER_ELMT,thread_bytes, COL_ITERS_FULL, dma_col_iter_inc, warp_active, warp_partial);
 			}
 #endif
 
@@ -2253,22 +2253,31 @@ private:
 		char * dst_row_ptr = ((char*)dst_ptr) + dma_dst_offset;
 		if (DMA_ROW_ITERS_FULL==0)
 		{
-			int opt_xfer = (thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ?
-			   	(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) :
-			   	(thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0);
-			// The optimized case
-			if (all_threads_active)
+			// check to see if there are column iterations to perform, if not might be able to do the optimized case
+			if (DMA_COL_ITERS_FULL == 0)
 			{
-				if (warp_partial)
-					CUDADMA_BASE::do_xfer<true,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);
+				int opt_xfer = (thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ?
+					(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) :
+					(thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0);
+				// The optimized case
+				if (all_threads_active)
+				{
+					if (warp_partial)
+						CUDADMA_BASE::do_xfer<true,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);
+					else
+						CUDADMA_BASE::wait_for_dma_start();
+				}
 				else
+				{
 					CUDADMA_BASE::wait_for_dma_start();
+					if (warp_partial)
+						CUDADMA_BASE::do_xfer<false,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);
+				}
 			}
-			else
+			else // We actually need to load multiple columns
 			{
 				CUDADMA_BASE::wait_for_dma_start();
-				if (warp_partial)
-					CUDADMA_BASE::do_xfer<false,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);
+				copy_elmt<BULK_TYPE,DMA_COL_ITERS_FULL>(src_row_ptr,dst_row_ptr);
 			}
 		}
 		else

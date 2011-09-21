@@ -1857,7 +1857,7 @@ public:
 		dma_src_offset (SPLIT_ELMT ? (SPLIT_WARP ? (threadIdx.x%THREADS_PER_ELMT) : (threadIdx.x%WARP_SIZE))*ALIGNMENT : ELMT_ID*el_stride),
 		dma_dst_offset (SPLIT_ELMT ? (SPLIT_WARP ? (threadIdx.x%THREADS_PER_ELMT) : (threadIdx.x%WARP_SIZE))*ALIGNMENT : ELMT_ID*BYTES_PER_ELMT),
 		warp_active (int(ELMT_ID) < ELMT_PER_STEP),
-		warp_partial (int(ELMT_ID) < (NUM_ELMTS%ELMT_PER_STEP)),
+		warp_partial (NUM_ELMTS==ELMT_PER_STEP ? true : int(ELMT_ID) < (NUM_ELMTS%ELMT_PER_STEP)),
 		dma_split_partial_elmts (PARTIAL_ELMTS)
 	{
 		if (LDS_PER_ELMT_PER_THREAD == 1) // Stripe the warp's loads across MAX_LDS_OUTSTANDING_PER_WARP elements
@@ -2024,7 +2024,7 @@ public:
 		dma_src_offset (SPLIT_ELMT ? (SPLIT_WARP ? (threadIdx.x%THREADS_PER_ELMT) : (threadIdx.x%WARP_SIZE))*ALIGNMENT : ELMT_ID*src_stride),
 		dma_dst_offset (SPLIT_ELMT ? (SPLIT_WARP ? (threadIdx.x%THREADS_PER_ELMT) : (threadIdx.x%WARP_SIZE))*ALIGNMENT : ELMT_ID*dst_stride),
 		warp_active (int(ELMT_ID) < ELMT_PER_STEP),
-		warp_partial (int(ELMT_ID) < (NUM_ELMTS%ELMT_PER_STEP)),
+		warp_partial (NUM_ELMTS==ELMT_PER_STEP ? true : int(ELMT_ID) < (NUM_ELMTS%ELMT_PER_STEP)),
 		dma_split_partial_elmts (PARTIAL_ELMTS)
 	{
 		if (LDS_PER_ELMT_PER_THREAD == 1) // Stripe the warp's loads across MAX_LDS_OUTSTANDING_PER_WARP elements
@@ -2259,7 +2259,7 @@ private:
 			// The optimized case
 			if (all_threads_active)
 			{
-				if (warp_active)
+				if (warp_partial)
 					CUDADMA_BASE::do_xfer<true,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);
 				else
 					CUDADMA_BASE::wait_for_dma_start();
@@ -2267,7 +2267,7 @@ private:
 			else
 			{
 				CUDADMA_BASE::wait_for_dma_start();
-				if (warp_active)
+				if (warp_partial)
 					CUDADMA_BASE::do_xfer<false,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);
 			}
 		}

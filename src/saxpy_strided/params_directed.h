@@ -1,8 +1,8 @@
-#define SAXPY_KERNEL saxpy_cudaDMA_brucek
-#define CTA_COUNT 1
-#define COMPUTE_THREADS_PER_CTA 32 * 2 
-#define DMA_THREADS_PER_LD 32 * 1
-#define NUM_ITERS 1
-#define DMA_SZ 4 * COMPUTE_THREADS_PER_CTA
+#define SAXPY_KERNEL saxpy_cudaDMA
+#define CTA_COUNT 14
+#define COMPUTE_THREADS_PER_CTA (32 * 24)
+#define DMA_THREADS_PER_LD (32 * 1)
+#define NUM_ITERS 2048
+#define DMA_SZ (4 * COMPUTE_THREADS_PER_CTA)
 #define BYTES_PER_DMA_THREAD (DMA_SZ / DMA_THREADS_PER_LD)
-#define EL_SZ 32 
+#define EL_SZ 1024

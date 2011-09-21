@@ -38,11 +38,11 @@
 void
 computeGoldResults( float* y, float* x, float a, int num_elements) 
 {
- for( unsigned int j = 0; j < NUM_ITERS; ++j) {
+  // for( unsigned int j = 0; j < NUM_ITERS; ++j) {
   for( unsigned int i = 0; i < num_elements; ++i) {
     y[i] = a * x[i] + y[i];
   }
- }
+  // }
 }
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -104,11 +104,12 @@ main( int argc, char** argv)
   if(COMPUTE_THREADS_PER_CTA > DMA_SZ_IN_FS) printf("WARNING: Compute threads on first iter will overrun shared buffer if idx not checked\n");
   printf ("Launching kernel with:\n");
   printf ("   %d total CTAs per SM\n",(CTA_COUNT/MY_GPU_SM_COUNT));
-  if ( (SAXPY_KERNEL==saxpy_cudaDMA) || (SAXPY_KERNEL==saxpy_cudaDMA_doublebuffer || (SAXPY_KERNEL==saxpy_cudaDMA_brucek)) ) {
+  if ( (SAXPY_KERNEL==saxpy_cudaDMA) || (SAXPY_KERNEL==saxpy_cudaDMA_doublebuffer) ) {
     printf ("   %d total threads per CTA (%d compute, %d dma)\n",THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA,DMA_THREADS_PER_CTA);
     printf ("   %d bytes per DMA thread\n",BYTES_PER_DMA_THREAD);
     printf ("   %d byte DMA transfer\n",DMA_SZ);
     printf ("   %d byte element size\n",EL_SZ);
+    printf ("   %d elements\n",DMA_SZ/EL_SZ);
   } else {
     printf ("   %d total threads per CTA\n",THREADS_PER_CTA);
     printf ("   %d total warps per CTA\n",THREADS_PER_CTA/32);

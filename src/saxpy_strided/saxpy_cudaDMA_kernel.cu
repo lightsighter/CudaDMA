@@ -40,41 +40,26 @@ __global__ void saxpy_baseline ( float* y, float* x, float a, clock_t * timer_va
   }
 }
 
+
+
 /*
  * This version of saxpy uses cudaDMA for DMAs (but requires 2 CTAs/SM) for double buffering.
  */
 __global__ void saxpy_cudaDMA ( float* y, float* x, float a, clock_t * timer_vals) 
 {
-  __shared__ float sdata_x0 [DMA_SZ_IN_FS];
-  __shared__ float sdata_y0 [DMA_SZ_IN_FS];
+  __shared__ float sdata_x0 [COMPUTE_THREADS_PER_CTA];
+  __shared__ float sdata_y0 [COMPUTE_THREADS_PER_CTA];
 
-#ifdef USE_SMALL_EL_OPT
-  cudaDMAStridedSmallElements
-    dma_ld_x_0 (1, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA, EL_SZ, DMA_SZ/EL_SZ, EL_SZ, EL_SZ);
-  cudaDMAStridedSmallElements
-    dma_ld_y_0 (2, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA + DMA_THREADS_PER_LD, EL_SZ, DMA_SZ/EL_SZ, EL_SZ, EL_SZ);
-#else
-  cudaDMAStrided<16>
-    dma_ld_x_0 (1, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA, EL_SZ, DMA_SZ/EL_SZ, EL_SZ);
-  cudaDMAStrided<16>
-    dma_ld_y_0 (2, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA + DMA_THREADS_PER_LD, EL_SZ, DMA_SZ/EL_SZ, EL_SZ);
+  cudaDMAStrided<EL_SZ,DMA_SZ/EL_SZ,16,DMA_THREADS_PER_LD>
+    dma_ld_x_0 (1, COMPUTE_THREADS_PER_CTA, COMPUTE_THREADS_PER_CTA, EL_SZ);
+  cudaDMAStrided<EL_SZ,DMA_SZ/EL_SZ,16,DMA_THREADS_PER_LD>
+    dma_ld_y_0 (2, COMPUTE_THREADS_PER_CTA, COMPUTE_THREADS_PER_CTA + DMA_THREADS_PER_LD, EL_SZ);
 
-  if (threadIdx.x==0) {
-    printf("el_sz = %d\n",EL_SZ);
-    printf("el_cnt = %d\n",DMA_SZ/EL_SZ);
-  }
-
-#endif
   int tid = threadIdx.x ;
 
-  if ( tid < COMPUTE_THREADS_PER_CTA) {
+  if ( tid < COMPUTE_THREADS_PER_CTA ) {
     unsigned int idx;
     int i;
-    int k;
     float tmp_x;
     float tmp_y;
     
@@ -82,272 +67,6 @@ __global__ void saxpy_cudaDMA ( float* y, float* x, float a, clock_t * timer_val
     dma_ld_x_0.start_async_dma();
     dma_ld_y_0.start_async_dma();
     for (i = 0; i < NUM_ITERS-1; ++i) {
-      dma_ld_x_0.wait_for_dma_finish();
-#ifdef DO_COMPUTE
-      tmp_x = sdata_x0[tid];
-#endif
-      dma_ld_x_0.start_async_dma();
-      dma_ld_y_0.wait_for_dma_finish();
-#ifdef DO_COMPUTE
-      tmp_y = sdata_y0[tid];
-#endif
-      dma_ld_y_0.start_async_dma();
-#ifdef DO_COMPUTE
-      idx = i * CTA_COUNT * DMA_SZ_IN_FS + blockIdx.x * DMA_SZ_IN_FS + threadIdx.x;
-      //idx = i%ALLOC_ITERS * CTA_COUNT * DMA_SZ_IN_FS + blockIdx.x * DMA_SZ_IN_FS + threadIdx.x;
-      y[idx] = a * tmp_x + tmp_y;
-      for(k = 1; k < ITERS_PER_COMPUTE_THREAD && k*COMPUTE_THREADS_PER_CTA+tid < DMA_SZ_IN_FS; ++k) {
-        tmp_x = sdata_x0[k*COMPUTE_THREADS_PER_CTA+tid];
-        tmp_y = sdata_y0[k*COMPUTE_THREADS_PER_CTA+tid];
-        idx = i * CTA_COUNT * DMA_SZ_IN_FS + blockIdx.x * DMA_SZ_IN_FS + k*COMPUTE_THREADS_PER_CTA + threadIdx.x;
-        //idx = i%ALLOC_ITERS * CTA_COUNT * DMA_SZ_IN_FS + blockIdx.x * DMA_SZ_IN_FS + k*COMPUTE_THREADS_PER_CTA + threadIdx.x;
-        y[idx] = a * tmp_x + tmp_y;
-      }
-#endif
-    }
-    // Postamble:
-    dma_ld_x_0.wait_for_dma_finish();
-    dma_ld_y_0.wait_for_dma_finish();
-#ifdef DO_COMPUTE
-    tmp_x = sdata_x0[tid];
-    tmp_y = sdata_y0[tid];
-    idx = i * CTA_COUNT * DMA_SZ_IN_FS + blockIdx.x * DMA_SZ_IN_FS + threadIdx.x;
-    //idx = i%ALLOC_ITERS * CTA_COUNT * DMA_SZ_IN_FS + blockIdx.x * DMA_SZ_IN_FS + threadIdx.x;
-    y[idx] = a * tmp_x + tmp_y;
-    for(k = 1; k < ITERS_PER_COMPUTE_THREAD && k*COMPUTE_THREADS_PER_CTA+tid < DMA_SZ_IN_FS; ++k) {
-      tmp_x = sdata_x0[k*COMPUTE_THREADS_PER_CTA+tid];
-      tmp_y = sdata_y0[k*COMPUTE_THREADS_PER_CTA+tid];
-      idx = i * CTA_COUNT * DMA_SZ_IN_FS + blockIdx.x * DMA_SZ_IN_FS + k*COMPUTE_THREADS_PER_CTA + threadIdx.x;
-      //idx = i%ALLOC_ITERS * CTA_COUNT * DMA_SZ_IN_FS + blockIdx.x * DMA_SZ_IN_FS + k*COMPUTE_THREADS_PER_CTA + threadIdx.x;
-      y[idx] = a * tmp_x + tmp_y;
-    }
-#endif
-  } else if (dma_ld_x_0.owns_this_thread()) {
-    for (unsigned int j = 0; j < NUM_ITERS; ++j) {
-      // idx is a pointer to the base of the chunk of memory to copy
-      unsigned int idx = j * DMA_SZ_IN_FS * CTA_COUNT + blockIdx.x * DMA_SZ_IN_FS;
-      //unsigned int idx = j%ALLOC_ITERS * DMA_SZ_IN_FS * CTA_COUNT + blockIdx.x * DMA_SZ_IN_FS;
-      dma_ld_x_0.execute_dma( &x[idx], sdata_x0 );
-    }
-  } else if (dma_ld_y_0.owns_this_thread()) {
-    for (unsigned int j = 0; j < NUM_ITERS; ++j) {
-      unsigned int idx = j * DMA_SZ_IN_FS * CTA_COUNT + blockIdx.x * DMA_SZ_IN_FS;
-      //unsigned int idx = j%ALLOC_ITERS * DMA_SZ_IN_FS * CTA_COUNT + blockIdx.x * DMA_SZ_IN_FS;
-      dma_ld_y_0.execute_dma( &y[idx], sdata_y0 );
-    }
-  }
-}
-
-
-
-/*
- * This version of saxpy uses cudaDMA for DMAs with manual double buffering.
- */
-__global__ void saxpy_cudaDMA_doublebuffer ( float* y, float* x, float a, clock_t * timer_vals) 
-{
-  __shared__ float sdata_x0 [DMA_SZ_IN_FS/2];
-  __shared__ float sdata_x1 [DMA_SZ_IN_FS/2];
-  __shared__ float sdata_y0 [DMA_SZ_IN_FS/2];
-  __shared__ float sdata_y1 [DMA_SZ_IN_FS/2];
-
-#ifdef USE_SMALL_EL_OPT
-  cudaDMAStridedSmallElements
-    dma_ld_x_0 (1, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA, EL_SZ, DMA_SZ/EL_SZ, EL_SZ, EL_SZ);
-  cudaDMAStridedSmallElements
-    dma_ld_y_0 (2, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA + DMA_THREADS_PER_LD, EL_SZ, DMA_SZ/EL_SZ, EL_SZ, EL_SZ);
-  cudaDMAStridedSmallElements
-    dma_ld_x_1 (3, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA + 2*DMA_THREADS_PER_LD, EL_SZ, DMA_SZ/EL_SZ, EL_SZ, EL_SZ);
-  cudaDMAStridedSmallElements
-    dma_ld_y_1 (4, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA + 3*DMA_THREADS_PER_LD, EL_SZ, DMA_SZ/EL_SZ, EL_SZ, EL_SZ);
-#else
-  cudaDMAStrided<16>
-    dma_ld_x_0 (1, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA, EL_SZ, DMA_SZ/EL_SZ, EL_SZ);
-  cudaDMAStrided<16>
-    dma_ld_y_0 (2, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA + DMA_THREADS_PER_LD, EL_SZ, DMA_SZ/EL_SZ, EL_SZ);
-  cudaDMAStrided<16>
-    dma_ld_x_1 (3, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA + 2*DMA_THREADS_PER_LD, EL_SZ, DMA_SZ/EL_SZ, EL_SZ);
-  cudaDMAStrided<16>
-    dma_ld_y_1 (4, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA + 3*DMA_THREADS_PER_LD, EL_SZ, DMA_SZ/EL_SZ, EL_SZ);
-#endif
-  int tid = threadIdx.x ;
-
-  if ( tid < COMPUTE_THREADS_PER_CTA ) {
-    unsigned int idx;
-    int i;
-    int k;
-    float tmp_x;
-    float tmp_y;
-    
-    // Preamble:
-    dma_ld_x_0.start_async_dma();
-    dma_ld_y_0.start_async_dma();
-    dma_ld_x_1.start_async_dma();
-    dma_ld_y_1.start_async_dma();
-    for (i = 0; i < NUM_ITERS-2; i += 2) {
-      
-      // Phase 1:
-      dma_ld_x_0.wait_for_dma_finish();
-#ifdef DO_COMPUTE
-      tmp_x = sdata_x0[tid];
-#endif
-      dma_ld_x_0.start_async_dma();
-      dma_ld_y_0.wait_for_dma_finish();
-#ifdef DO_COMPUTE
-      tmp_y = sdata_y0[tid];
-#endif
-      dma_ld_y_0.start_async_dma();
-#ifdef DO_COMPUTE
-      //idx = i * CTA_COUNT * DMA_SZ_IN_FS + blockIdx.x * DMA_SZ_IN_FS + threadIdx.x;
-      idx = blockIdx.x * DMA_SZ_IN_FS + threadIdx.x;
-      y[idx] = a * tmp_x + tmp_y;
-      for(k = 1; k < ITERS_PER_COMPUTE_THREAD && k*COMPUTE_THREADS_PER_CTA+tid < DMA_SZ_IN_FS; ++k) {
-        tmp_x = sdata_x0[k*COMPUTE_THREADS_PER_CTA+tid];
-        tmp_y = sdata_y0[k*COMPUTE_THREADS_PER_CTA+tid];
-        //idx = i * CTA_COUNT * DMA_SZ_IN_FS + blockIdx.x * DMA_SZ_IN_FS + k*COMPUTE_THREADS_PER_CTA + threadIdx.x;
-        idx = blockIdx.x * DMA_SZ_IN_FS + k*COMPUTE_THREADS_PER_CTA + threadIdx.x;
-        y[idx] = a * tmp_x + tmp_y;
-      }
-#endif
-
-      // Phase 2:
-      dma_ld_x_1.wait_for_dma_finish();
-#ifdef DO_COMPUTE
-      tmp_x = sdata_x1[tid];
-#endif
-      dma_ld_x_1.start_async_dma();
-      dma_ld_y_1.wait_for_dma_finish();
-#ifdef DO_COMPUTE
-      tmp_y = sdata_y1[tid];
-#endif
-      dma_ld_y_1.start_async_dma();
-#ifdef DO_COMPUTE
-      //idx = (i+1) * CTA_COUNT * DMA_SZ_IN_FS + blockIdx.x * DMA_SZ_IN_FS + threadIdx.x;
-      idx = blockIdx.x * DMA_SZ_IN_FS + threadIdx.x;
-      y[idx] = a * tmp_x + tmp_y;
-      for(k = 1; k < ITERS_PER_COMPUTE_THREAD && k*COMPUTE_THREADS_PER_CTA+tid < DMA_SZ_IN_FS; ++k) {
-        tmp_x = sdata_x1[k*COMPUTE_THREADS_PER_CTA+tid];
-        tmp_y = sdata_y1[k*COMPUTE_THREADS_PER_CTA+tid];
-        //idx = (i+1) * CTA_COUNT * DMA_SZ_IN_FS + blockIdx.x * DMA_SZ_IN_FS + k*COMPUTE_THREADS_PER_CTA + threadIdx.x;
-        idx = blockIdx.x * DMA_SZ_IN_FS + k*COMPUTE_THREADS_PER_CTA + threadIdx.x;
-        y[idx] = a * tmp_x + tmp_y;
-      }
-#endif
-    }
-      
-    // Postamble
-    dma_ld_x_0.wait_for_dma_finish();
-#ifdef DO_COMPUTE
-    tmp_x = sdata_x0[tid];
-#endif
-    dma_ld_y_0.wait_for_dma_finish();
-#ifdef DO_COMPUTE
-    tmp_y = sdata_y0[tid];
-    //idx = i * CTA_COUNT * DMA_SZ_IN_FS + blockIdx.x * DMA_SZ_IN_FS + threadIdx.x;
-    idx = blockIdx.x * DMA_SZ_IN_FS + threadIdx.x;
-    y[idx] = a * tmp_x + tmp_y;
-    for(k = 1; k < ITERS_PER_COMPUTE_THREAD && k*COMPUTE_THREADS_PER_CTA+tid < DMA_SZ_IN_FS; ++k) {
-      tmp_x = sdata_x0[k*COMPUTE_THREADS_PER_CTA+tid];
-      tmp_y = sdata_y0[k*COMPUTE_THREADS_PER_CTA+tid];
-      //idx = i * CTA_COUNT * DMA_SZ_IN_FS + blockIdx.x * DMA_SZ_IN_FS + k*COMPUTE_THREADS_PER_CTA + threadIdx.x;
-      idx = blockIdx.x * DMA_SZ_IN_FS + k*COMPUTE_THREADS_PER_CTA + threadIdx.x;
-      y[idx] = a * tmp_x + tmp_y;
-    }
-#endif
-
-    dma_ld_x_1.wait_for_dma_finish();
-#ifdef DO_COMPUTE
-    tmp_x = sdata_x1[tid];
-#endif
-    dma_ld_y_1.wait_for_dma_finish();
-#ifdef DO_COMPUTE
-    tmp_y = sdata_y1[tid];
-    //idx = (i+1) * COMPUTE_THREADS_PER_CTA * CTA_COUNT + blockIdx.x * COMPUTE_THREADS_PER_CTA + threadIdx.x;
-    idx = blockIdx.x * COMPUTE_THREADS_PER_CTA + threadIdx.x;
-    y[idx] = a * tmp_x + tmp_y;
-    for(k = 1; k < ITERS_PER_COMPUTE_THREAD && k*COMPUTE_THREADS_PER_CTA+tid < DMA_SZ_IN_FS; ++k) {
-      tmp_x = sdata_x1[k*COMPUTE_THREADS_PER_CTA+tid];
-      tmp_y = sdata_y1[k*COMPUTE_THREADS_PER_CTA+tid];
-      //idx = (i+1) * CTA_COUNT * DMA_SZ_IN_FS + blockIdx.x * DMA_SZ_IN_FS + k*COMPUTE_THREADS_PER_CTA + threadIdx.x;
-      idx = blockIdx.x * DMA_SZ_IN_FS + k*COMPUTE_THREADS_PER_CTA + threadIdx.x;
-      y[idx] = a * tmp_x + tmp_y;
-    }
-#endif
-
-  } else if (dma_ld_x_0.owns_this_thread()) {
-    for (unsigned int j = 0; j < NUM_ITERS; j+=2) {
-      // idx is a pointer to the base of the chunk of memory to copy
-      //unsigned int idx = j * DMA_SZ_IN_FS * CTA_COUNT + blockIdx.x * DMA_SZ_IN_FS;
-      unsigned int idx = blockIdx.x * DMA_SZ_IN_FS;
-      dma_ld_x_0.execute_dma( &x[idx], sdata_x0 );
-    }
-  } else if (dma_ld_y_0.owns_this_thread()) {
-    for (unsigned int j = 0; j < NUM_ITERS; j+=2) {
-      //unsigned int idx = j * DMA_SZ_IN_FS * CTA_COUNT + blockIdx.x * DMA_SZ_IN_FS;
-      unsigned int idx = blockIdx.x * DMA_SZ_IN_FS;
-      dma_ld_y_0.execute_dma( &y[idx], sdata_y0 );
-    }
-  } else if (dma_ld_x_1.owns_this_thread()) {
-    for (unsigned int j = 1; j < NUM_ITERS; j+=2) {
-      //unsigned int idx = j * DMA_SZ_IN_FS * CTA_COUNT + blockIdx.x * DMA_SZ_IN_FS;
-      unsigned int idx = blockIdx.x * DMA_SZ_IN_FS;
-      dma_ld_x_1.execute_dma( &x[idx], sdata_x1 );
-    }
-  } else if (dma_ld_y_1.owns_this_thread()) {
-    for (unsigned int j = 1; j < NUM_ITERS; j+=2) {
-      //unsigned int idx = j * DMA_SZ_IN_FS * CTA_COUNT + blockIdx.x * DMA_SZ_IN_FS;
-      unsigned int idx = blockIdx.x * DMA_SZ_IN_FS;
-      dma_ld_y_1.execute_dma( &y[idx], sdata_y1 );
-    }
-  }
-  
-}
-
-
-
-/*
- * This version of saxpy uses cudaDMA for DMAs (but requires 2 CTAs/SM) for double buffering.
- */
-__global__ void saxpy_cudaDMA_brucek ( float* y, float* x, float a, clock_t * timer_vals) 
-{
-  __shared__ float sdata_x0 [COMPUTE_THREADS_PER_CTA];
-  __shared__ float sdata_y0 [COMPUTE_THREADS_PER_CTA];
-
-  cudaDMAStrided<16>
-    dma_ld_x_0 (1, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA, EL_SZ, DMA_SZ/EL_SZ, EL_SZ);
-  cudaDMAStrided<16>
-    dma_ld_y_0 (2, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA + DMA_THREADS_PER_LD, EL_SZ, DMA_SZ/EL_SZ, EL_SZ);
-
-  /*
-  cudaDMASequential<BYTES_PER_DMA_THREAD,16>
-    dma_ld_x_0 (1, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA, DMA_SZ);
-  cudaDMASequential<BYTES_PER_DMA_THREAD,16>
-    dma_ld_y_0 (2, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA + DMA_THREADS_PER_LD, DMA_SZ);
-  */
-
-  int tid = threadIdx.x ;
-
-  if ( tid < COMPUTE_THREADS_PER_CTA ) {
-    unsigned int idx;
-    int i;
-    float tmp_x;
-    float tmp_y;
-    
-    // Preamble:
-    dma_ld_x_0.start_async_dma();
-    dma_ld_y_0.start_async_dma();
-    for (i = 0; i < ITERS_PER_COMPUTE_THREAD-1; ++i) {
       dma_ld_x_0.wait_for_dma_finish();
       tmp_x = sdata_x0[tid];
       dma_ld_x_0.start_async_dma();
@@ -366,16 +85,110 @@ __global__ void saxpy_cudaDMA_brucek ( float* y, float* x, float a, clock_t * ti
     y[idx] = a * tmp_x + tmp_y;
 
   } else if (dma_ld_x_0.owns_this_thread()) {
-    for (unsigned int j = 0; j < ITERS_PER_COMPUTE_THREAD; j++) {
+    for (unsigned int j = 0; j < NUM_ITERS; ++j) {
       // idx is a pointer to the base of the chunk of memory to copy
       unsigned int idx = j * COMPUTE_THREADS_PER_CTA * CTA_COUNT + blockIdx.x * COMPUTE_THREADS_PER_CTA;
       dma_ld_x_0.execute_dma( &x[idx], sdata_x0 );
     }
   } else if (dma_ld_y_0.owns_this_thread()) {
-    for (unsigned int j = 0; j < ITERS_PER_COMPUTE_THREAD; j++) {
+    for (unsigned int j = 0; j < NUM_ITERS; ++j) {
       unsigned int idx = j * COMPUTE_THREADS_PER_CTA * CTA_COUNT + blockIdx.x * COMPUTE_THREADS_PER_CTA;
       dma_ld_y_0.execute_dma( &y[idx], sdata_y0 );
     }
   }
 }
 
+
+/*
+ * This version of saxpy uses cudaDMA for DMAs with manual double buffering.
+ */
+__global__ void saxpy_cudaDMA_doublebuffer ( float* y, float* x, float a, clock_t * timer_vals) 
+{
+  __shared__ float sdata_x0 [COMPUTE_THREADS_PER_CTA];
+  __shared__ float sdata_x1 [COMPUTE_THREADS_PER_CTA];
+  __shared__ float sdata_y0 [COMPUTE_THREADS_PER_CTA];
+  __shared__ float sdata_y1 [COMPUTE_THREADS_PER_CTA];
+
+  cudaDMAStrided<EL_SZ,DMA_SZ/EL_SZ,16,DMA_THREADS_PER_LD>
+    dma_ld_x_0 (1, COMPUTE_THREADS_PER_CTA, COMPUTE_THREADS_PER_CTA, EL_SZ);
+  cudaDMAStrided<EL_SZ,DMA_SZ/EL_SZ,16,DMA_THREADS_PER_LD>
+    dma_ld_y_0 (2, COMPUTE_THREADS_PER_CTA, COMPUTE_THREADS_PER_CTA + DMA_THREADS_PER_LD, EL_SZ);
+  cudaDMAStrided<EL_SZ,DMA_SZ/EL_SZ,16,DMA_THREADS_PER_LD>
+    dma_ld_x_1 (3, COMPUTE_THREADS_PER_CTA, COMPUTE_THREADS_PER_CTA + 2*DMA_THREADS_PER_LD, EL_SZ);
+  cudaDMAStrided<EL_SZ,DMA_SZ/EL_SZ,16,DMA_THREADS_PER_LD>
+    dma_ld_y_1 (4, COMPUTE_THREADS_PER_CTA, COMPUTE_THREADS_PER_CTA + 3*DMA_THREADS_PER_LD, EL_SZ);
+
+  int tid = threadIdx.x ;
+
+  if ( tid < COMPUTE_THREADS_PER_CTA ) {
+    unsigned int idx;
+    int i;
+    float tmp_x;
+    float tmp_y;
+    
+    // Preamble:
+    dma_ld_x_0.start_async_dma();
+    dma_ld_y_0.start_async_dma();
+    dma_ld_x_1.start_async_dma();
+    dma_ld_y_1.start_async_dma();
+    for (i = 0; i < NUM_ITERS-2; i += 2) {
+      
+      // Phase 1:
+      dma_ld_x_0.wait_for_dma_finish();
+      tmp_x = sdata_x0[tid];
+      dma_ld_x_0.start_async_dma();
+      dma_ld_y_0.wait_for_dma_finish();
+      tmp_y = sdata_y0[tid];
+      dma_ld_y_0.start_async_dma();
+      idx = i * COMPUTE_THREADS_PER_CTA * CTA_COUNT + blockIdx.x * COMPUTE_THREADS_PER_CTA + threadIdx.x;
+      y[idx] = a * tmp_x + tmp_y;
+
+      // Phase 2:
+      dma_ld_x_1.wait_for_dma_finish();
+      tmp_x = sdata_x1[tid];
+      dma_ld_x_1.start_async_dma();
+      dma_ld_y_1.wait_for_dma_finish();
+      tmp_y = sdata_y1[tid];
+      dma_ld_y_1.start_async_dma();
+      idx = (i+1) * COMPUTE_THREADS_PER_CTA * CTA_COUNT + blockIdx.x * COMPUTE_THREADS_PER_CTA + threadIdx.x;
+      y[idx] = a * tmp_x + tmp_y;
+    }
+      
+    // Postamble
+    dma_ld_x_0.wait_for_dma_finish();
+    tmp_x = sdata_x0[tid];
+    dma_ld_y_0.wait_for_dma_finish();
+    tmp_y = sdata_y0[tid];
+    idx = i * COMPUTE_THREADS_PER_CTA * CTA_COUNT + blockIdx.x * COMPUTE_THREADS_PER_CTA + threadIdx.x;
+    y[idx] = a * tmp_x + tmp_y;
+    dma_ld_x_1.wait_for_dma_finish();
+    tmp_x = sdata_x1[tid];
+    dma_ld_y_1.wait_for_dma_finish();
+    tmp_y = sdata_y1[tid];
+    idx = (i+1) * COMPUTE_THREADS_PER_CTA * CTA_COUNT + blockIdx.x * COMPUTE_THREADS_PER_CTA + threadIdx.x;
+    y[idx] = a * tmp_x + tmp_y;
+
+  } else if (dma_ld_x_0.owns_this_thread()) {
+    for (unsigned int j = 0; j < NUM_ITERS; j+=2) {
+      // idx is a pointer to the base of the chunk of memory to copy
+      unsigned int idx = j * COMPUTE_THREADS_PER_CTA * CTA_COUNT + blockIdx.x * COMPUTE_THREADS_PER_CTA;
+      dma_ld_x_0.execute_dma( &x[idx], sdata_x0 );
+    }
+  } else if (dma_ld_y_0.owns_this_thread()) {
+    for (unsigned int j = 0; j < NUM_ITERS; j+=2) {
+      unsigned int idx = j * COMPUTE_THREADS_PER_CTA * CTA_COUNT + blockIdx.x * COMPUTE_THREADS_PER_CTA;
+      dma_ld_y_0.execute_dma( &y[idx], sdata_y0 );
+    }
+  } else if (dma_ld_x_1.owns_this_thread()) {
+    for (unsigned int j = 1; j < NUM_ITERS; j+=2) {
+      unsigned int idx = j * COMPUTE_THREADS_PER_CTA * CTA_COUNT + blockIdx.x * COMPUTE_THREADS_PER_CTA;
+      dma_ld_x_1.execute_dma( &x[idx], sdata_x1 );
+    }
+  } else if (dma_ld_y_1.owns_this_thread()) {
+    for (unsigned int j = 1; j < NUM_ITERS; j+=2) {
+      unsigned int idx = j * COMPUTE_THREADS_PER_CTA * CTA_COUNT + blockIdx.x * COMPUTE_THREADS_PER_CTA;
+      dma_ld_y_1.execute_dma( &y[idx], sdata_y1 );
+    }
+  }
+  
+}

@@ -46,7 +46,7 @@
 		if (err != cudaSuccess)				\
 		{						\
 			printf("Cuda error: %s\n", cudaGetErrorString(err));	\
-			exit(1);				\
+			exit(false);				\
 		}						\
 	}
 
@@ -671,8 +671,11 @@ int main()
 	const int element_size = PARAM_ELMT_SIZE/sizeof(float);
 	const int min_stride = element_size + (element_size%(PARAM_ALIGNMENT/sizeof(float)) ? 
 					((PARAM_ALIGNMENT/sizeof(float))-(element_size%(PARAM_ALIGNMENT/sizeof(float)))) : 0);
+	fprintf(stdout,"Experiment: ALIGNMENT-%d OFFSET-%d ELMT_SIZE-%d NUM_ELMTS-%d DMA_WARPS-%d ",PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS/32); 
+	fflush(stdout);
 	bool result = run_experiment<PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS>(min_stride,min_stride);
-	printf("Experiment: ALIGNMENT-%d OFFSET-%d ELMT_SIZE-%d NUM_ELMTS-%d DMA_WARPS-%d RESULT: %s\n",PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS/32,(result?"SUCCESS":"FAILURE"));
+	fprintf(stdout,"RESULT: %s\n",(result?"SUCCESS":"FAILURE"));
+	fflush(stdout);
 #else
 	bool result = true;
 	printf("Running all experiments for ALIGNMENT-%d OFFSET-%d ELMT_SIZE-%d... ",PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE);

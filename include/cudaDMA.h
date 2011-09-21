@@ -1867,7 +1867,11 @@ public:
 
 			if (leftover_bytes==0)
 			{
-				all_threads_active = true;
+				// We also need to make sure that all the threads in a warp have the same number of partial elmts
+				if (NUM_ELMTS % (WARP_SIZE/THREADS_PER_ELMT) == 0)
+					all_threads_active = true;
+				else
+					all_threads_active = false;
 				partial_bytes = ALIGNMENT;	
 			}
 			else
@@ -2030,7 +2034,11 @@ public:
 
 			if (leftover_bytes==0)
 			{
-				all_threads_active = true;
+				// We also need to make sure that all the threads in a warp have the same number of partial elmts
+				if (NUM_ELMTS % (WARP_SIZE/THREADS_PER_ELMT) == 0)
+					all_threads_active = true;
+				else
+					all_threads_active = false;
 				partial_bytes = ALIGNMENT;	
 			}
 			else

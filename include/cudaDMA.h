@@ -2153,7 +2153,7 @@ public:
 #ifdef CUDADMA_DEBUG_ON 
 			if (CUDADMA_BASE::is_dma_thread)
 			{
-				printf("FULL LOAD: DMA id %d: element_id %d  src_offset %d  dst_offset %d  row_iters %d  warps_per_elem %d  thread_bytes %d  col_iters %d  col_iter_inc %d\n",CUDADMA_DMA_TID,ELMT_ID,dma_src_offset,dma_dst_offset,ROW_ITERS_FULL,WARPS_PER_ELMT,thread_bytes, COL_ITERS_SPLIT, dma_col_iter_inc);
+				printf("FULL LOAD: DMA id %d: element_id %d  src_offset %d  dst_offset %d  row_iters %d  warps_per_elem %d  thread_bytes %d  col_iters %d  col_iter_inc %d active %d partial %d\n",CUDADMA_DMA_TID,ELMT_ID,dma_src_offset,dma_dst_offset,ROW_ITERS_FULL,WARPS_PER_ELMT,thread_bytes, COL_ITERS_SPLIT, dma_col_iter_inc, warp_active, warp_partial);
 			}
 #endif
 
@@ -2259,12 +2259,16 @@ private:
 			// The optimized case
 			if (all_threads_active)
 			{
-				CUDADMA_BASE::do_xfer<true,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);
+				if (warp_partial)
+					CUDADMA_BASE::do_xfer<true,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);
+				else
+					CUDADMA_BASE::wait_for_dma_start();
 			}
 			else
 			{
 				CUDADMA_BASE::wait_for_dma_start();
-				CUDADMA_BASE::do_xfer<false,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);
+				if (warp_partial)
+					CUDADMA_BASE::do_xfer<false,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);
 			}
 		}
 		else

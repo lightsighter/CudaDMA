@@ -1805,7 +1805,7 @@ public:
 	(id*(SPLIT_WARP ? DMA_THREADS/THREADS_PER_ELMT : DMA_THREADS/WARP_SIZE)*stride + ELMT_ID_SPLIT*stride) : \
 	id*ALIGNMENT*WARPS_PER_ELMT*WARP_SIZE + ALIGNMENT*CUDADMA_WARP_TID)
 
-#define ROW_ITERS_FULL (NUM_ELMTS/ELMT_PER_STEP)
+#define ROW_ITERS_FULL ((NUM_ELMTS==ELMT_PER_STEP) ? 0 : NUM_ELMTS/ELMT_PER_STEP)
 #define ROW_ITERS_SPLIT ((NUM_ELMTS==ELMT_PER_STEP_SPLIT) ? 0 : NUM_ELMTS/ELMT_PER_STEP_SPLIT) // Handle the optimized case special
 #define COL_ITERS_FULL ((BYTES_PER_ELMT-4)/(MAX_BYTES_OUTSTANDING_PER_THREAD*WARPS_PER_ELMT*WARP_SIZE))
 #define COL_ITERS_SPLIT (SPLIT_WARP ? 1 : (LDS_PER_ELMT/WARP_SIZE))
@@ -2259,7 +2259,7 @@ private:
 			// The optimized case
 			if (all_threads_active)
 			{
-				if (warp_partial)
+				if (warp_active)
 					CUDADMA_BASE::do_xfer<true,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);
 				else
 					CUDADMA_BASE::wait_for_dma_start();
@@ -2267,7 +2267,7 @@ private:
 			else
 			{
 				CUDADMA_BASE::wait_for_dma_start();
-				if (warp_partial)
+				if (warp_active)
 					CUDADMA_BASE::do_xfer<false,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);
 			}
 		}

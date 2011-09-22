@@ -59,7 +59,7 @@ dma_ld_test ( float *idata, float *odata, int src_stride/*bytes*/, int dst_strid
 {
 	extern __shared__ float buffer[];	
 
-	cudaDMAStrided<BYTES_PER_ELMT,NUM_ELMTS,ALIGNMENT,DMA_THREADS>
+	cudaDMAStrided<ALIGNMENT, BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
 	  dma0 (1, num_compute_threads,
 		num_compute_threads,
 		src_stride,

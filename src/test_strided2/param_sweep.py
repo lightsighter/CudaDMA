@@ -8,13 +8,14 @@ MAX_ELMT_SIZE=8192 # in floats
 MAX_NUM_ELMTS=32
 MAX_DMA_WARPS=16
 
-def run_experiment(alignment,offset,elem_size,num_elmts,dma_warps):
+def run_experiment(alignment,offset,elem_size,num_elmts,dma_warps,num_templates):
     f = open("params_directed.h",'w')
     f.write("#define PARAM_ALIGNMENT "+str(alignment)+"\n")
     f.write("#define PARAM_OFFSET "+str(offset)+"\n")
     f.write("#define PARAM_ELMT_SIZE "+str(elem_size*4)+"\n")
     f.write("#define PARAM_NUM_ELMTS "+str(num_elmts)+"\n")
     f.write("#define PARAM_DMA_THREADS "+str(dma_warps*32)+"\n")
+    f.write("#define PARAM_NUM_TEMPLATES "+str(num_templates)+"\n")
     f.close()
     os.system('make clean; make')
     result = os.system('./test_strided')
@@ -54,11 +55,12 @@ def run_random_experiments():
             elem_size = -elem_size
         num_elems = random.randint(1,MAX_NUM_ELMTS)
         warps = random.randint(1,MAX_DMA_WARPS)
+	num_templates = random.sample([1,2,3,4],1)[0]
         #if elem_size > 256:
         #    above += 1
         #else:
         #    below += 1
-        run_experiment(alignment,offset,elem_size,num_elems,warps)
+        run_experiment(alignment,offset,elem_size,num_elems,warps,num_templates)
     #print "Above "+str(above)+" Below "+str(below)
 
 def main():

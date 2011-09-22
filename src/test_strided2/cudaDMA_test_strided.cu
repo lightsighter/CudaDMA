@@ -55,11 +55,11 @@ long total_experiments = 0;
 
 template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS>
 __global__ void __launch_bounds__(1024,1)
-dma_ld_test ( float *idata, float *odata, int src_stride/*bytes*/, int dst_stride/*bytes*/, int buffer_size /*number of floats*/, int num_compute_threads)
+dma_ld_test_four ( float *idata, float *odata, int src_stride/*bytes*/, int dst_stride/*bytes*/, int buffer_size /*number of floats*/, int num_compute_threads)
 {
 	extern __shared__ float buffer[];	
 
-	cudaDMAStrided<ALIGNMENT, BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
+	cudaDMAStrided<ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
 	  dma0 (1, num_compute_threads,
 		num_compute_threads,
 		src_stride,
@@ -105,7 +105,168 @@ dma_ld_test ( float *idata, float *odata, int src_stride/*bytes*/, int dst_strid
 	}
 }	
 
-template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS>
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int DMA_THREADS>
+__global__ void __launch_bounds__(1024,1)
+dma_ld_test_three ( float *idata, float *odata, int src_stride/*bytes*/, int dst_stride/*bytes*/, int buffer_size /*number of floats*/, int num_compute_threads, int num_elmts)
+{
+	extern __shared__ float buffer[];	
+
+	cudaDMAStrided<ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
+	  dma0 (1, num_compute_threads,
+		num_compute_threads,
+		num_elmts,
+		src_stride,
+		dst_stride);
+
+	if (dma0.owns_this_thread())
+	{
+		float *base_ptr = &(idata[ALIGN_OFFSET]);
+#ifdef CUDADMA_DEBUG_ON
+		dma0.wait_for_dma_start();
+		dma0.finish_async_dma();
+#else
+		dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+#endif
+	}
+	else
+	{
+		// Zero out the buffer
+		int iters = buffer_size/num_compute_threads;	
+		int index = threadIdx.x;
+		for (int i=0; i<iters; i++)
+		{
+			buffer[index] = 0.0f;
+			index += num_compute_threads;
+		}
+		if (index < buffer_size)
+			buffer[index] = 0.0f;
+		dma0.start_async_dma();
+		dma0.wait_for_dma_finish();
+		// Now read the buffer out of shared and write the results back
+		index = threadIdx.x;
+		for (int i=0; i<iters; i++)
+		{
+			float res = buffer[index];
+			odata[index] = res;
+			index += num_compute_threads;
+		}
+		if (index < buffer_size)
+		{
+			float res = buffer[index];
+			odata[index] = res;
+		}
+	}
+}	
+
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT>
+__global__ void __launch_bounds__(1024,1)
+dma_ld_test_two ( float *idata, float *odata, int src_stride/*bytes*/, int dst_stride/*bytes*/, int buffer_size /*number of floats*/, int num_compute_threads, int num_elmts, int dma_threads)
+{
+	extern __shared__ float buffer[];	
+
+	cudaDMAStrided<ALIGNMENT,BYTES_PER_ELMT>
+	  dma0 (1, dma_threads, num_compute_threads,
+		num_compute_threads,
+		num_elmts,
+		src_stride,
+		dst_stride);
+
+	if (dma0.owns_this_thread())
+	{
+		float *base_ptr = &(idata[ALIGN_OFFSET]);
+#ifdef CUDADMA_DEBUG_ON
+		dma0.wait_for_dma_start();
+		dma0.finish_async_dma();
+#else
+		dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+#endif
+	}
+	else
+	{
+		// Zero out the buffer
+		int iters = buffer_size/num_compute_threads;	
+		int index = threadIdx.x;
+		for (int i=0; i<iters; i++)
+		{
+			buffer[index] = 0.0f;
+			index += num_compute_threads;
+		}
+		if (index < buffer_size)
+			buffer[index] = 0.0f;
+		dma0.start_async_dma();
+		dma0.wait_for_dma_finish();
+		// Now read the buffer out of shared and write the results back
+		index = threadIdx.x;
+		for (int i=0; i<iters; i++)
+		{
+			float res = buffer[index];
+			odata[index] = res;
+			index += num_compute_threads;
+		}
+		if (index < buffer_size)
+		{
+			float res = buffer[index];
+			odata[index] = res;
+		}
+	}
+}	
+
+template<int ALIGNMENT, int ALIGN_OFFSET>
+__global__ void __launch_bounds__(1024,1)
+dma_ld_test_one ( float *idata, float *odata, int src_stride/*bytes*/, int dst_stride/*bytes*/, int buffer_size /*number of floats*/, int num_compute_threads, int bytes_per_elmt, int num_elmts, int dma_threads)
+{
+	extern __shared__ float buffer[];	
+
+	cudaDMAStrided<ALIGNMENT>
+	  dma0 (1, dma_threads, 
+		num_compute_threads,
+		num_compute_threads,
+		bytes_per_elmt,
+		num_elmts,
+		src_stride,
+		dst_stride);
+
+	if (dma0.owns_this_thread())
+	{
+		float *base_ptr = &(idata[ALIGN_OFFSET]);
+#ifdef CUDADMA_DEBUG_ON
+		dma0.wait_for_dma_start();
+		dma0.finish_async_dma();
+#else
+		dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+#endif
+	}
+	else
+	{
+		// Zero out the buffer
+		int iters = buffer_size/num_compute_threads;	
+		int index = threadIdx.x;
+		for (int i=0; i<iters; i++)
+		{
+			buffer[index] = 0.0f;
+			index += num_compute_threads;
+		}
+		if (index < buffer_size)
+			buffer[index] = 0.0f;
+		dma0.start_async_dma();
+		dma0.wait_for_dma_finish();
+		// Now read the buffer out of shared and write the results back
+		index = threadIdx.x;
+		for (int i=0; i<iters; i++)
+		{
+			float res = buffer[index];
+			odata[index] = res;
+			index += num_compute_threads;
+		}
+		if (index < buffer_size)
+		{
+			float res = buffer[index];
+			odata[index] = res;
+		}
+	}
+}	
+
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS, int NUM_TEMPLATE_PARAMS>
 __host__ bool run_experiment(int src_stride /*in floats*/, int dst_stride/*in floats*/)
 {
 	// check some assertions
@@ -139,9 +300,35 @@ __host__ bool run_experiment(int src_stride /*in floats*/, int dst_stride/*in fl
 	int num_compute_warps = 1;
 	int total_threads = (num_compute_warps)*WARP_SIZE + DMA_THREADS;
 
-	dma_ld_test<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,DMA_THREADS>
-		<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-		(d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, num_compute_warps*WARP_SIZE);
+	switch (NUM_TEMPLATE_PARAMS)
+	{
+	case 1:
+		dma_ld_test_one<ALIGNMENT,ALIGN_OFFSET>
+			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+			(d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, num_compute_warps*WARP_SIZE,
+			BYTES_PER_ELMT,NUM_ELMTS,DMA_THREADS);
+		break;	
+	case 2:
+		dma_ld_test_two<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT>
+			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+			(d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, num_compute_warps*WARP_SIZE,
+			NUM_ELMTS,DMA_THREADS);
+		break;
+	case 3:
+		dma_ld_test_three<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,DMA_THREADS>
+			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+			(d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, num_compute_warps*WARP_SIZE,
+			NUM_ELMTS);
+		break;
+	case 4:
+		dma_ld_test_four<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,DMA_THREADS>
+			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+			(d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, num_compute_warps*WARP_SIZE);
+		break;
+	default:
+		assert(false);
+		break;
+	}
 
 	CUDA_SAFE_CALL( cudaThreadSynchronize());
 
@@ -671,9 +858,9 @@ int main()
 	const int element_size = PARAM_ELMT_SIZE/sizeof(float);
 	const int min_stride = element_size + (element_size%(PARAM_ALIGNMENT/sizeof(float)) ? 
 					((PARAM_ALIGNMENT/sizeof(float))-(element_size%(PARAM_ALIGNMENT/sizeof(float)))) : 0);
-	fprintf(stdout,"Experiment: ALIGNMENT-%d OFFSET-%d ELMT_SIZE-%d NUM_ELMTS-%d DMA_WARPS-%d ",PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS/32); 
+	fprintf(stdout,"Experiment: ALIGNMENT-%2d OFFSET-%d ELMT_SIZE-%5d NUM_ELMTS-%2d DMA_WARPS-%2d NUM_TEMPLATES-%d ",PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS/32,PARAM_NUM_TEMPLATES); 
 	fflush(stdout);
-	bool result = run_experiment<PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS>(min_stride,min_stride);
+	bool result = run_experiment<PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS,PARAM_NUM_TEMPLATES>(min_stride,min_stride);
 	fprintf(stdout,"RESULT: %s\n",(result?"SUCCESS":"FAILURE"));
 	fflush(stdout);
 #else

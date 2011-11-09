@@ -15,17 +15,18 @@
  */
 
 /* 
- * SAXPY test code...used for both functionality and performance testing
+ * SAXPY example code
  */
 
 #pragma once
 
 #include <stdio.h>
+#include <stdlib.h>
+
 //#define CUDADMA_DEBUG_ON 1
 #define PRINT_ERRORS 1
-#include "../../include/cudaDMA.h"
+#include "../../../include/cudaDMA.h"
 #include "params.h"
-#include <stdlib.h>
 
 /*
  * This baseline version of saxpy is to demonstrate the CUDA C Best Practices version of writing saxpy.  

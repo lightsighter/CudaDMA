@@ -1,54 +1,26 @@
-################################################################################
 #
-# Copyright 1993-2006 NVIDIA Corporation.  All rights reserved.
+#  Copyright 2010 NVIDIA Corporation
 #
-# NOTICE TO USER:   
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
 #
-# This source code is subject to NVIDIA ownership rights under U.S. and 
-# international Copyright laws.  
+#      http://www.apache.org/licenses/LICENSE-2.0
 #
-# NVIDIA MAKES NO REPRESENTATION ABOUT THE SUITABILITY OF THIS SOURCE 
-# CODE FOR ANY PURPOSE.  IT IS PROVIDED "AS IS" WITHOUT EXPRESS OR 
-# IMPLIED WARRANTY OF ANY KIND.  NVIDIA DISCLAIMS ALL WARRANTIES WITH 
-# REGARD TO THIS SOURCE CODE, INCLUDING ALL IMPLIED WARRANTIES OF 
-# MERCHANTABILITY, NONINFRINGEMENT, AND FITNESS FOR A PARTICULAR PURPOSE.   
-# IN NO EVENT SHALL NVIDIA BE LIABLE FOR ANY SPECIAL, INDIRECT, INCIDENTAL, 
-# OR CONSEQUENTIAL DAMAGES, OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS 
-# OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE 
-# OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE 
-# OR PERFORMANCE OF THIS SOURCE CODE.  
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
 #
-# U.S. Government End Users.  This source code is a "commercial item" as 
-# that term is defined at 48 C.F.R. 2.101 (OCT 1995), consisting  of 
-# "commercial computer software" and "commercial computer software 
-# documentation" as such terms are used in 48 C.F.R. 12.212 (SEPT 1995) 
-# and is provided to the U.S. Government only as a commercial end item.  
-# Consistent with 48 C.F.R.12.212 and 48 C.F.R. 227.7202-1 through 
-# 227.7202-4 (JUNE 1995), all U.S. Government End Users acquire the 
-# source code with only those rights set forth herein.
-#
-################################################################################
-#
-# Build script for project
-#
-################################################################################
-
-# Add source files here
-EXECUTABLE	:= saxpy_cudaDMA
-# CUDA source files (compiled with cudacc)
-CUFILES		:= saxpy_cudaDMA.cu
-# CUDA dependency files
-CU_DEPS		:= \
-	saxpy_cudaDMA_kernel.cu \
-	saxpy_cudaDMA.cu \
-	params.h \
-	params_common.h \
-	../../include/cudaDMA.h \
 
 
+DEPS = params.h params_common.h ../../../include/cudaDMA.h saxpy_cudaDMA.cu saxpy_cudaDMA_kernel.cu
 
-################################################################################
-# Rules and targets
-ROOTDIR		:= ../../..
-ROOTBINDIR	:= ../../bin
-include ../../../../common/common.mk
+all: saxpy_cudaDMA
+
+saxpy_cudaDMA: $(DEPS)
+	nvcc -o saxpy_cudaDMA -O2 -arch=compute_20 -code=sm_20 saxpy_cudaDMA.cu
+
+clean:
+	rm -f *.o saxpy_cudaDMA

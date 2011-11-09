@@ -15,7 +15,7 @@
  */
 
 /* 
- * SAXPY test code using cudaDMA library.
+ * SAXPY example code using cudaDMA library.
  * Host code.
  */
 
@@ -26,15 +26,41 @@
 #include <math.h>
 
 // includes, project
-#include <cutil_inline.h>
+#include "cuda.h"
+#include "cuda_runtime.h"
 
 // includes, kernels
-#include <saxpy_cudaDMA_kernel.cu>
+#include "saxpy_cudaDMA_kernel.cu"
 #include "params.h"
 
 #define MY_GPU_SM_COUNT 14
-
 #define PRINT_ERRORS 1
+
+
+#define CUDA_SAFE_CALL(x)					\
+	{							\
+		cudaError_t err = (x);				\
+		if (err != cudaSuccess)				\
+		{						\
+			printf("Cuda error: %s\n", cudaGetErrorString(err));	\
+			exit(1);				\
+		}						\
+	}
+
+void process_error( cudaError_t error, char *string=0, bool verbose=false )
+{
+    if( cudaSuccess != error )
+    {
+        if( string )
+            printf( "%s: ", string );
+        printf( "%s\n", cudaGetErrorString( error ) );
+        exit( -1 );
+    }
+        
+    if( verbose && string )
+        printf( "%s\n", string );
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////
 void
@@ -57,13 +83,6 @@ int
 main( int argc, char** argv) 
 {
 
-  // use command-line specified CUDA device, otherwise use device with highest Gflops/s
-  if( cutCheckCmdLineFlag(argc, (const char**)argv, "device") )
-    cutilDeviceInit(argc, argv);
-  else
-    cudaSetDevice( cutGetMaxGflopsDeviceId() );
-
-
   unsigned int num_elements = CTA_COUNT * NUM_ITERS * COMPUTE_THREADS_PER_CTA;
   unsigned int mem_size = sizeof(float) * num_elements;
   // Allocate host memory
@@ -81,21 +100,26 @@ main( int argc, char** argv)
   // Allocate device memory
   float* d_x;
   float* d_y;
-  cutilSafeCall( cudaMalloc( (void**) &d_x, mem_size));
-  cutilSafeCall( cudaMalloc( (void**) &d_y, mem_size));
+  CUDA_SAFE_CALL( cudaMalloc( (void**) &d_x, mem_size));
+  CUDA_SAFE_CALL( cudaMalloc( (void**) &d_y, mem_size));
   // Copy host memory to device
-  cutilSafeCall( cudaMemcpy( d_x, h_x, mem_size,
+  CUDA_SAFE_CALL( cudaMemcpy( d_x, h_x, mem_size,
 			     cudaMemcpyHostToDevice) );
-  cutilSafeCall( cudaMemcpy( d_y, h_y, mem_size,
+  CUDA_SAFE_CALL( cudaMemcpy( d_y, h_y, mem_size,
 			     cudaMemcpyHostToDevice) );
 
   // Timer setup stuff
-  unsigned int timer = 0;
-  cutilCheckError( cutCreateTimer( &timer));
+  cudaError_t error = cudaSuccess;
+  float f_time_ms=0.f;
+  cudaEvent_t start, stop;
+  error = cudaEventCreate( &start );
+  process_error( error, "create start event" );
+  error = cudaEventCreate( &stop );
+  process_error( error, "create stop event" );
+  
   clock_t * d_timer_vals;
   unsigned int timer_size = sizeof(clock_t) * 4 * num_elements;
-  cutilSafeCall( cudaMalloc( (void**) &d_timer_vals, timer_size));
-  cutilCheckError( cutStartTimer( timer));
+  CUDA_SAFE_CALL( cudaMalloc( (void**) &d_timer_vals, timer_size));
 
   // Execute the kernel
   printf ("Launching kernel with:\n");
@@ -108,27 +132,28 @@ main( int argc, char** argv)
     printf ("   %d total threads per CTA\n",THREADS_PER_CTA);
     printf ("   %d total warps per CTA\n",THREADS_PER_CTA/32);
   }
+
+  cudaEventRecord( start, 0 );
   SAXPY_KERNEL<<< CTA_COUNT, THREADS_PER_CTA >>>( d_y, d_x, a, d_timer_vals);
-  cudaThreadSynchronize();
+  error = cudaThreadSynchronize();
+  cudaEventRecord( stop, 0 );
+  cudaEventSynchronize(stop);
+  process_error( error, "kernel" );
+  error = cudaEventElapsedTime( &f_time_ms, start, stop );
+  process_error( error, "get event elapsed time" );
 
   // Stop Timer:
-  cutilCheckError( cutStopTimer( timer));
-  float f_time = cutGetTimerValue( timer);
-  cutilCheckError( cutDeleteTimer( timer));
-  printf( "Processing time: %f (ms)\n", f_time);
+  printf( "Processing time: %f (ms)\n", f_time_ms);
   printf( "Bytes Processed: %d KB\n", static_cast<int>(static_cast<float>(mem_size) / 1024.0 ));
-
-  // Check if kernel execution generated and error
-  cutilCheckMsg("Kernel execution failed");
 
   // Allocate mem for the device results on host side
   float* h_results = (float*) malloc( mem_size );
   clock_t* h_timer_vals = (clock_t*) malloc (timer_size);
     
   // copy result from device to host
-  cutilSafeCall( cudaMemcpy( h_results, d_y, mem_size, 
+  CUDA_SAFE_CALL( cudaMemcpy( h_results, d_y, mem_size, 
 			     cudaMemcpyDeviceToHost) );
-  cutilSafeCall( cudaMemcpy( h_timer_vals, d_timer_vals, timer_size, 
+  CUDA_SAFE_CALL( cudaMemcpy( h_timer_vals, d_timer_vals, timer_size, 
 			     cudaMemcpyDeviceToHost) );
 
 #ifdef TIMERS_ON
@@ -168,9 +193,9 @@ main( int argc, char** argv)
   // Report bandwidths
   double d_log2_size = log2( static_cast<double> (mem_size/4) );
   printf( "Vector Dimension:  2^%.1f\n", d_log2_size);
-  float f_bw = static_cast<float>(3*mem_size) / f_time / static_cast<float>(1000000.0);
+  float f_bw = static_cast<float>(3*mem_size) / f_time_ms / static_cast<float>(1000000.0);
   printf( "Bandwidth: %f GB/s\n", f_bw);
-  float f_gflops = static_cast<float>(2*(mem_size/4)) / f_time / static_cast<float>(1000000.0);
+  float f_gflops = static_cast<float>(2*(mem_size/4)) / f_time_ms / static_cast<float>(1000000.0);
   printf( "Performance: %f GFLOPS\n", f_gflops);
     
   // cleanup memory
@@ -178,10 +203,9 @@ main( int argc, char** argv)
   free( h_y );
   free( h_results );
   free( h_timer_vals );
-  cutilSafeCall(cudaFree(d_x));
-  cutilSafeCall(cudaFree(d_y));
+  CUDA_SAFE_CALL(cudaFree(d_x));
+  CUDA_SAFE_CALL(cudaFree(d_y));
 
   cudaThreadExit();
-  //cutilExit(argc, argv);
 }
 

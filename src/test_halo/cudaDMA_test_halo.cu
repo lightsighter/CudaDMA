@@ -385,9 +385,9 @@ int main()
 
 	// An 8192*sizeof(float) element is almost all of shared memory (can only fit one)
 	// We probably want to test up to 32 elements per stride if we're going to have up to 16 dma warps
-	success16_0 = success16_0 && run_all_experiments<16,0>(16,64,64);
-	success08_0 = success08_0 && run_all_experiments<8,0>(16,64,64);
-	success08_2 = success08_2 && run_all_experiments<8,1>(16,64,64);
+	//success16_0 = success16_0 && run_all_experiments<16,0>(16,64,64);
+	//success08_0 = success08_0 && run_all_experiments<8,0>(16,64,64);
+	//success08_2 = success08_2 && run_all_experiments<8,1>(16,64,64);
 	success04_0 = success04_0 && run_all_experiments<4,0>(16,64,64);
 	success04_1 = success04_1 && run_all_experiments<4,1>(16,64,64);
 	success04_2 = success04_2 && run_all_experiments<4,2>(16,64,64);

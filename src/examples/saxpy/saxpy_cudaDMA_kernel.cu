@@ -15,7 +15,7 @@
  */
 
 /* 
- * SAXPY test code...used for both functionality and performance testing
+ * SAXPY example code
  * 
  * Kernel descriptions:
  *   saxpy_baseline: 
@@ -37,13 +37,13 @@
 
 #pragma once
 
-
-
 #include <stdio.h>
-//#define CUDADMA_DEBUG_ON 1
-#include "../../include/cudaDMA.h"
-#include "params.h"
 #include <stdlib.h>
+
+#include "../../../include/cudaDMA.h"
+#include "params.h"
+
+//#define CUDADMA_DEBUG_ON 1
 
 /*
  * This baseline version of saxpy is to demonstrate the CUDA C Best Practices version of writing saxpy.  

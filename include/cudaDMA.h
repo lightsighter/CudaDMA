@@ -529,9 +529,11 @@ class cudaDMA {
 #define LDS_PER_ELMT_PER_THREAD ((LDS_PER_ELMT+DMA_THREADS-1)/DMA_THREADS)
 #define FULL_LDS_PER_ELMT (LDS_PER_ELMT/DMA_THREADS)
 
-#define CUDADMASEQUENTIAL_DMA_ITERS ((BYTES_PER_ELMT-1)/(DMA_THREADS*MAX_BYTES_OUTSTANDING_PER_THREAD))
+#define DMA_ITERS ((BYTES_PER_ELMT-1)/(DMA_THREADS*MAX_BYTES_OUTSTANDING_PER_THREAD))
 // All of these values below will be used as byte address offsets:
-#define CUDADMASEQUENTIAL_DMA_ITER_INC (MAX_BYTES_OUTSTANDING_PER_THREAD*DMA_THREADS)
+#define DMA_ITER_INC (MAX_BYTES_OUTSTANDING_PER_THREAD*DMA_THREADS)
+#define DMA_ALL_THREADS_ACTIVE ((BYTES_PER_ELMT % (ALIGNMENT*DMA_THREADS)) == 0)
+
 #define CUDADMASEQUENTIAL_DMA1_ITER_OFFS 1*ALIGNMENT*CUDADMA_DMA_TID
 #define CUDADMASEQUENTIAL_DMA2_ITER_OFFS 1*ALIGNMENT*DMA_THREADS+ALIGNMENT*CUDADMA_DMA_TID
 #define CUDADMASEQUENTIAL_DMA3_ITER_OFFS 2*ALIGNMENT*DMA_THREADS+ALIGNMENT*CUDADMA_DMA_TID
@@ -540,50 +542,128 @@ class cudaDMA {
 #define CUDADMASEQUENTIAL_DMA2_OFFS (1*ALIGNMENT*DMA_THREADS+ ALIGNMENT*CUDADMA_DMA_TID)
 #define CUDADMASEQUENTIAL_DMA3_OFFS (2*ALIGNMENT*DMA_THREADS+ ALIGNMENT*CUDADMA_DMA_TID)
 #define CUDADMASEQUENTIAL_DMA4_OFFS (3*ALIGNMENT*DMA_THREADS+ ALIGNMENT*CUDADMA_DMA_TID)
-	      
+
+#define SEQUENTIAL_INIT(BYTES_PER_ELMT,DMA_THREADS)                         \
+      int num_vec4_loads = BYTES_PER_ELMT / (ALIGNMENT*DMA_THREADS);        \
+      int leftover_bytes = BYTES_PER_ELMT % (ALIGNMENT*DMA_THREADS);        \
+      int dma_iters = ((BYTES_PER_ELMT-1)/(DMA_THREADS*MAX_BYTES_OUTSTANDING_PER_THREAD));  \
+      if (leftover_bytes==0) {                                              \
+	partial_thread_bytes = num_vec4_loads*ALIGNMENT;                    \
+	is_partial_thread = false;                                          \
+	is_active_thread = true;                                            \
+      } else {                                                              \
+	int max_thread_bytes = ALIGNMENT;                                   \
+	if (leftover_bytes>=(max_thread_bytes*(CUDADMA_DMA_TID+1))) {       \
+	  partial_thread_bytes = (num_vec4_loads)*ALIGNMENT + max_thread_bytes; \
+	  is_partial_thread = false;                                        \
+	  is_active_thread = true;                                          \
+	} else if (leftover_bytes<(max_thread_bytes*CUDADMA_DMA_TID)) {     \
+	  is_active_thread = false;                                         \
+	  partial_thread_bytes = (num_vec4_loads-(dma_iters*MAX_LDS_OUTSTANDING_PER_THREAD))*ALIGNMENT; \
+	  is_partial_thread = (num_vec4_loads!=0);                          \
+	} else {                                                            \
+	  partial_thread_bytes = (num_vec4_loads-(dma_iters*MAX_LDS_OUTSTANDING_PER_THREAD))*ALIGNMENT + (leftover_bytes%max_thread_bytes);\
+	  is_partial_thread = true;                                         \
+	  is_active_thread = false;                                         \
+	}                                                                   \
+      } 
+
+#define SEQUENTIAL_EXECUTE(BYTES_PER_ELMT,DMA_THREADS)                      \
+      int this_thread_bytes = is_active_thread ? partial_thread_bytes : is_partial_thread ? partial_thread_bytes : 0; \
+      if (DO_SYNC && ((((BYTES_PER_ELMT-1)/(DMA_THREADS*MAX_BYTES_OUTSTANDING_PER_THREAD))>0) || (!((BYTES_PER_ELMT % (ALIGNMENT*DMA_THREADS))==0)))) { \
+        CUDADMA_BASE::wait_for_dma_start();                                 \
+      }                                                                     \
+      char * src_temp = (char *)src_ptr;                                    \
+      char * dst_temp = (char *)dst_ptr;                                    \
+      switch (ALIGNMENT)                                                    \
+        {                                                                   \
+          case 4:                                                           \
+            {                                                               \
+              for(int i = 0; i < ((BYTES_PER_ELMT-1)/(DMA_THREADS*MAX_BYTES_OUTSTANDING_PER_THREAD)); i++) {                          \
+                CUDADMA_BASE::template perform_four_xfers<float,float,false,false> (src_temp,dst_temp); \
+                src_temp += (MAX_BYTES_OUTSTANDING_PER_THREAD*DMA_THREADS); \
+                dst_temp += (MAX_BYTES_OUTSTANDING_PER_THREAD*DMA_THREADS); \
+              }                                                             \
+              break;                                                        \
+            }                                                               \
+          case 8:                                                           \
+            {                                                               \
+              for(int i = 0; i < ((BYTES_PER_ELMT-1)/(DMA_THREADS*MAX_BYTES_OUTSTANDING_PER_THREAD)); i++) {  \
+                CUDADMA_BASE::template perform_four_xfers<float2,float2,false,false> (src_temp,dst_temp); \
+                src_temp += (MAX_BYTES_OUTSTANDING_PER_THREAD*DMA_THREADS); \
+                dst_temp += (MAX_BYTES_OUTSTANDING_PER_THREAD*DMA_THREADS); \
+              }                                                             \
+              break;                                                        \
+            }                                                               \
+          case 16:                                                          \
+            {                                                               \
+              for(int i = 0; i < ((BYTES_PER_ELMT-1)/(DMA_THREADS*MAX_BYTES_OUTSTANDING_PER_THREAD)); i++) {  \
+                CUDADMA_BASE::template perform_four_xfers<float4,float4,false,false> (src_temp,dst_temp); \
+                src_temp += (MAX_BYTES_OUTSTANDING_PER_THREAD*DMA_THREADS); \
+                dst_temp += (MAX_BYTES_OUTSTANDING_PER_THREAD*DMA_THREADS); \
+              }                                                             \
+              break;                                                        \
+            }                                                               \
+        }                                                                   \
+      if (((BYTES_PER_ELMT % (ALIGNMENT*DMA_THREADS)) == 0)) {              \
+        if (((BYTES_PER_ELMT-1)/(DMA_THREADS*MAX_BYTES_OUTSTANDING_PER_THREAD))== 0)  \
+        {                                                                   \
+          CUDADMA_BASE::template do_xfer<DO_SYNC, ALIGNMENT> ( src_temp, dst_temp, \
+                                                  (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ? \
+                                                  (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) : \
+                                                  MAX_BYTES_OUTSTANDING_PER_THREAD );                   \
+        }                                                                   \
+        else                                                                \
+        {                                                                   \
+          CUDADMA_BASE::template do_xfer<false, ALIGNMENT> ( src_temp, dst_temp, \
+                                                  (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ? \
+                                                  (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) : \
+                                                  MAX_BYTES_OUTSTANDING_PER_THREAD ); \
+        }                                                                   \
+      } else {                                                              \
+        CUDADMA_BASE::template do_xfer<false, ALIGNMENT> ( src_temp, dst_temp,  \
+                         (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ? \
+                         (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) : \
+                         (this_thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0)); \
+      }                                                                     \
+      CUDADMA_BASE::finish_async_dma();
+
+
 template<int ALIGNMENT=4, int BYTES_PER_ELMT=0, int DMA_THREADS=0>
 class cudaDMASequential : public CUDADMA_BASE {
-
- public:
-
-  // DMA Addressing variables
-  const unsigned int dma_iters;
-  const unsigned int dma_iter_inc;  // Precomputed offset for next copy iteration
-  const bool all_threads_active; // If true, then we know that all threads are guaranteed to be active (needed for sync/divergence functionality guarantee)
+private:
   bool is_active_thread;   // If true, then all of BYTES_PER_THREAD will be transferred for this thread
   bool is_partial_thread;  // If true, then only some of BYTES_PER_THREAD will be transferred for this thread
   int partial_thread_bytes;
-
+public:
   __device__ cudaDMASequential (const int dmaID,
 				const int num_compute_threads,
 				const int dma_threadIdx_start)
-    : CUDADMA_BASE (dmaID,
-		    DMA_THREADS,
-		    num_compute_threads,
-		    dma_threadIdx_start, 
-                    CUDADMASEQUENTIAL_DMA1_ITER_OFFS,
-                    CUDADMASEQUENTIAL_DMA2_ITER_OFFS,
-                    CUDADMASEQUENTIAL_DMA3_ITER_OFFS,
-                    CUDADMASEQUENTIAL_DMA4_ITER_OFFS,
-                    CUDADMASEQUENTIAL_DMA1_OFFS,
-                    CUDADMASEQUENTIAL_DMA2_OFFS,
-                    CUDADMASEQUENTIAL_DMA3_OFFS,
-                    CUDADMASEQUENTIAL_DMA4_OFFS,
-                    CUDADMASEQUENTIAL_DMA1_ITER_OFFS,
-                    CUDADMASEQUENTIAL_DMA2_ITER_OFFS,
-                    CUDADMASEQUENTIAL_DMA3_ITER_OFFS,
-                    CUDADMASEQUENTIAL_DMA4_ITER_OFFS,
-                    CUDADMASEQUENTIAL_DMA1_OFFS,
-                    CUDADMASEQUENTIAL_DMA2_OFFS,
-                    CUDADMASEQUENTIAL_DMA3_OFFS,
-                    CUDADMASEQUENTIAL_DMA4_OFFS
-                   ),
-    dma_iters (CUDADMASEQUENTIAL_DMA_ITERS),
-    dma_iter_inc (CUDADMASEQUENTIAL_DMA_ITER_INC),
-    //all_threads_active (sz==(BYTES_PER_THREAD*num_dma_threads))
-    all_threads_active ((BYTES_PER_ELMT % (ALIGNMENT*DMA_THREADS))==0)
+      : CUDADMA_BASE (  dmaID,                            
+                        DMA_THREADS,                      
+                        num_compute_threads,              
+                        dma_threadIdx_start,              
+                        CUDADMASEQUENTIAL_DMA1_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA2_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA3_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA4_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA1_OFFS,      
+                        CUDADMASEQUENTIAL_DMA2_OFFS,      
+                        CUDADMASEQUENTIAL_DMA3_OFFS,      
+                        CUDADMASEQUENTIAL_DMA4_OFFS,      
+                        CUDADMASEQUENTIAL_DMA1_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA2_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA3_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA4_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA1_OFFS,      
+                        CUDADMASEQUENTIAL_DMA2_OFFS,     
+                        CUDADMASEQUENTIAL_DMA3_OFFS,      
+                        CUDADMASEQUENTIAL_DMA4_OFFS       
+                   )
     {
-
+#ifdef SEQUENTIAL_INIT
+      SEQUENTIAL_INIT(BYTES_PER_ELMT,DMA_THREADS);
+#else
       // Do a bunch of arithmetic based on total size of the xfer:
       int num_vec4_loads = BYTES_PER_ELMT / (ALIGNMENT*DMA_THREADS);
       int leftover_bytes = BYTES_PER_ELMT % (ALIGNMENT*DMA_THREADS);
@@ -641,10 +721,21 @@ class cudaDMASequential : public CUDADMA_BASE {
 	}
       }
 #endif
+#endif // SEQUENTIAL_INIT
     }
-  
+public:
+  __device__ __forceinline__ void execute_dma ( void * src_ptr, void * dst_ptr) const
+  {
+    execute_internal<true>(src_ptr, dst_ptr);
+  }
+  __device__ __forceinline__ void execute_dma_no_sync ( void * src_ptr, void * dst_ptr) const
+  {
+    execute_internal<false>(src_ptr, dst_ptr);
+  }
+protected:
   // DMA-thread Data Transfer Functions:
-    __device__ __forceinline__ void execute_dma ( void * src_ptr, void * dst_ptr ) const
+  template<bool DO_SYNC>
+    __device__ __forceinline__ void execute_internal ( void * src_ptr, void * dst_ptr ) const
   {
 
 #ifdef CUDADMA_DEBUG_ON
@@ -654,10 +745,12 @@ class cudaDMASequential : public CUDADMA_BASE {
       }
 	*/
 #endif
-
+#ifdef SEQUENTIAL_EXECUTE
+    SEQUENTIAL_EXECUTE(BYTES_PER_ELMT,DMA_THREADS);
+#else
     //int this_thread_bytes = is_active_thread ? BYTES_PER_THREAD : is_partial_thread ? partial_thread_bytes : 0;
     int this_thread_bytes = is_active_thread ? partial_thread_bytes : is_partial_thread ? partial_thread_bytes : 0;
-    if ((dma_iters>0) || (!all_threads_active)) {
+    if (DO_SYNC && ((DMA_ITERS>0) || (!DMA_ALL_THREADS_ACTIVE))) {
       CUDADMA_BASE::wait_for_dma_start(); 
     }
     // Slightly less optimized case
@@ -699,11 +792,21 @@ class cudaDMASequential : public CUDADMA_BASE {
 #endif
       }
     // Handle the leftovers
-    if (all_threads_active) {
-      CUDADMA_BASE::template do_xfer<CUDADMASEQUENTIAL_DMA_ITERS==0, ALIGNMENT> ( src_temp, dst_temp, 
-						(this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ? 
-						(this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) : 
-						MAX_BYTES_OUTSTANDING_PER_THREAD );
+    if (DMA_ALL_THREADS_ACTIVE) {
+      if (DMA_ITERS == 0)
+      {
+        CUDADMA_BASE::template do_xfer<DO_SYNC, ALIGNMENT> ( src_temp, dst_temp, 
+                                                  (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ? 
+                                                  (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) : 
+                                                  MAX_BYTES_OUTSTANDING_PER_THREAD );
+      }
+      else
+      {
+        CUDADMA_BASE::template do_xfer<false, ALIGNMENT> ( src_temp, dst_temp, 
+                                                  (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ? 
+                                                  (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) : 
+                                                  MAX_BYTES_OUTSTANDING_PER_THREAD );
+      }
     } else {
 #ifdef CUDADMA_DEBUG_ON
       if ((CUDADMA_BASE::dma_tid==1)&&(CUDADMA_BASE::barrierID_full==4)&&(CUDADMA_BASE::is_dma_thread)) {
@@ -727,8 +830,9 @@ class cudaDMASequential : public CUDADMA_BASE {
 		       (this_thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0));
     }
     CUDADMA_BASE::finish_async_dma();
+#endif // SEQUENTIAL_EXECUTE
   }
-
+public:
   // Public DMA-thread Synchronization Functions:
   __device__ __forceinline__ void wait_for_dma_start() const
   {
@@ -738,8 +842,147 @@ class cudaDMASequential : public CUDADMA_BASE {
   {
     CUDADMA_BASE::finish_async_dma();
   }
-
 };
+
+template<int ALIGNMENT>
+class cudaDMASequential<ALIGNMENT,0,0> : public CUDADMA_BASE
+{
+private:
+  const int num_dma_threads;
+  const int bytes_per_elmt;
+  bool is_active_thread;
+  bool is_partial_thread;
+  int partial_thread_bytes;
+public:
+  __device__ cudaDMASequential (const int dmaID,
+                                const int DMA_THREADS,
+                                const int num_compute_threads,
+                                const int dma_threadIdx_start,
+                                const int BYTES_PER_ELMT)
+    : CUDADMA_BASE (    dmaID,                            
+                        DMA_THREADS,                  
+                        num_compute_threads,              
+                        dma_threadIdx_start,              
+                        CUDADMASEQUENTIAL_DMA1_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA2_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA3_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA4_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA1_OFFS,      
+                        CUDADMASEQUENTIAL_DMA2_OFFS,      
+                        CUDADMASEQUENTIAL_DMA3_OFFS,      
+                        CUDADMASEQUENTIAL_DMA4_OFFS,      
+                        CUDADMASEQUENTIAL_DMA1_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA2_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA3_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA4_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA1_OFFS,      
+                        CUDADMASEQUENTIAL_DMA2_OFFS,      
+                        CUDADMASEQUENTIAL_DMA3_OFFS,      
+                        CUDADMASEQUENTIAL_DMA4_OFFS      
+                   ),
+    num_dma_threads(DMA_THREADS),
+    bytes_per_elmt(BYTES_PER_ELMT)
+  {
+    SEQUENTIAL_INIT(BYTES_PER_ELMT,DMA_THREADS);
+  }
+public:
+  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  {
+    execute_internal<true>(src_ptr, dst_ptr);   
+  }
+  __device__ __forceinline__ void execute_dma_no_sync(void * src_ptr, void * dst_ptr) const
+  {
+    execute_internal<false>(src_ptr, dst_ptr);
+  }
+protected:
+  template<bool DO_SYNC>
+  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+  {
+    SEQUENTIAL_EXECUTE(bytes_per_elmt,num_dma_threads);
+  }
+public:
+  // Public DMA-thread Synchronization Functions:
+  __device__ __forceinline__ void wait_for_dma_start() const
+  {
+    CUDADMA_BASE::wait_for_dma_start();
+  }
+  __device__ __forceinline__ void finish_async_dma() const
+  {
+    CUDADMA_BASE::finish_async_dma();
+  }
+};
+
+template<int ALIGNMENT, int BYTES_PER_ELMT>
+class cudaDMASequential<ALIGNMENT,BYTES_PER_ELMT,0> : public CUDADMA_BASE
+{
+private:
+  const int num_dma_threads;
+  bool is_active_thread;
+  bool is_partial_thread;
+  int partial_thread_bytes;
+public:
+  __device__ cudaDMASequential (const int dmaID,
+                                const int DMA_THREADS,
+                                const int num_compute_threads,
+                                const int dma_threadIdx_start)
+    : CUDADMA_BASE (    dmaID,                            
+                        DMA_THREADS,                      
+                        num_compute_threads,              
+                        dma_threadIdx_start,              
+                        CUDADMASEQUENTIAL_DMA1_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA2_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA3_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA4_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA1_OFFS,      
+                        CUDADMASEQUENTIAL_DMA2_OFFS,      
+                        CUDADMASEQUENTIAL_DMA3_OFFS,      
+                        CUDADMASEQUENTIAL_DMA4_OFFS,      
+                        CUDADMASEQUENTIAL_DMA1_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA2_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA3_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA4_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA1_OFFS,      
+                        CUDADMASEQUENTIAL_DMA2_OFFS,     
+                        CUDADMASEQUENTIAL_DMA3_OFFS,      
+                        CUDADMASEQUENTIAL_DMA4_OFFS 
+        ),
+    num_dma_threads(DMA_THREADS)
+  {
+    SEQUENTIAL_INIT(BYTES_PER_ELMT,DMA_THREADS);
+  }
+public:
+  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const 
+  {
+    execute_internal<true>(src_ptr, dst_ptr);
+  }
+  __device__ __forceinline__ void execute_dma_no_sync(void * src_ptr, void * dst_ptr) const
+  {
+    execute_internal<false>(src_ptr, dst_ptr);
+  }
+protected:
+  template<bool DO_SYNC>
+  __device__ __forceinline__ void execute_internal( void * src_ptr, void * dst_ptr) const
+  {
+    SEQUENTIAL_EXECUTE(BYTES_PER_ELMT,num_dma_threads);
+  }
+public:
+  // Public DMA-thread Synchronization Functions:
+  __device__ __forceinline__ void wait_for_dma_start() const
+  {
+    CUDADMA_BASE::wait_for_dma_start();
+  }
+  __device__ __forceinline__ void finish_async_dma() const
+  {
+    CUDADMA_BASE::finish_async_dma();
+  }
+};
+
+#undef DMA_ITERS
+#undef DMA_ITER_INC
+#undef DMA_ALL_THREADS_ACTIVE
+#undef SEQUENTIAL_BASE
+#undef SEQUENTIAL_INIT
+#undef SEQUENTAIL_EXECUTE
 #undef LDS_PER_ELMT
 #undef LDS_PER_ELMT_PER_THREAD
 #undef FULL_LDS_PER_ELMT

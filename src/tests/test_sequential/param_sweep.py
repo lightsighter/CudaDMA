@@ -13,8 +13,7 @@ def run_experiment(alignment,offset,elem_size,dma_warps,num_templates):
     f.write("#define PARAM_OFFSET "+str(offset)+"\n")
     f.write("#define PARAM_ELMT_SIZE "+str(elem_size*4)+"\n")
     f.write("#define PARAM_DMA_THREADS "+str(dma_warps*32)+"\n")
-    f.write("#define PARAM_NUM_TEMPLATES 3\n")
-    #f.write("#define PARAM_NUM_TEMPLATES "+str(num_templates)+"\n")
+    f.write("#define PARAM_NUM_TEMPLATES "+str(num_templates)+"\n")
     f.close()
     os.system('make clean; make')
     result = os.system('./test_sequential')
@@ -53,7 +52,7 @@ def run_random_experiments():
         if elem_size < 0:
             elem_size = -elem_size
         warps = random.randint(1,MAX_DMA_WARPS)
-	num_templates = random.sample([1,2,3,4],1)[0]
+	num_templates = random.sample([1,2,3],1)[0]
         #if elem_size > 256:
         #    above += 1
         #else:

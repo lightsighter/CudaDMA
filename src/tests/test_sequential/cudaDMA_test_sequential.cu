@@ -100,6 +100,106 @@ dma_xfer_three( float *idata, float *odata, int buffer_size, int num_compute_thr
   }
 }
 
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT>
+__global__ void __launch_bounds__(1024,1)
+dma_xfer_two( float *idata, float *odata, int buffer_size, int num_compute_threads, int num_dma_threads)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMASequential<ALIGNMENT,BYTES_PER_ELMT>
+    dma0 (1, num_dma_threads, num_compute_threads,
+             num_compute_threads);
+
+  if (dma0.owns_this_thread())
+  {
+    float *base_ptr = &(idata[ALIGN_OFFSET]);
+#ifdef CUDADMA_DEBUG_ON
+    dma0.wait_for_dma_start();
+    dma0.finish_async_dma();
+#else
+    dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+#endif
+  }
+  else
+  {
+    // Zero out the buffer 
+    int iters = buffer_size/num_compute_threads;	
+    int index = threadIdx.x;
+    for (int i=0; i<iters; i++)
+    {
+            buffer[index] = 0.0f;
+            index += num_compute_threads;
+    }
+    if (index < buffer_size)
+            buffer[index] = 0.0f;
+    dma0.start_async_dma();
+    dma0.wait_for_dma_finish();
+    // Now read the buffer out of shared and write the results back
+    index = threadIdx.x;
+    for (int i=0; i<iters; i++)
+    {
+            float res = buffer[index];
+            odata[index] = res;
+            index += num_compute_threads;
+    }
+    if (index < buffer_size)
+    {
+            float res = buffer[index];
+            odata[index] = res;
+    }
+  }
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET>
+__global__ void __launch_bounds__(1024,1)
+dma_xfer_one( float *idata, float *odata, int buffer_size, int num_compute_threads, int num_dma_threads, int bytes_per_elmt)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMASequential<ALIGNMENT>
+    dma0 (1, num_dma_threads, num_compute_threads,
+             num_compute_threads, bytes_per_elmt);
+
+  if (dma0.owns_this_thread())
+  {
+    float *base_ptr = &(idata[ALIGN_OFFSET]);
+#ifdef CUDADMA_DEBUG_ON
+    dma0.wait_for_dma_start();
+    dma0.finish_async_dma();
+#else
+    dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+#endif
+  }
+  else
+  {
+    // Zero out the buffer 
+    int iters = buffer_size/num_compute_threads;	
+    int index = threadIdx.x;
+    for (int i=0; i<iters; i++)
+    {
+            buffer[index] = 0.0f;
+            index += num_compute_threads;
+    }
+    if (index < buffer_size)
+            buffer[index] = 0.0f;
+    dma0.start_async_dma();
+    dma0.wait_for_dma_finish();
+    // Now read the buffer out of shared and write the results back
+    index = threadIdx.x;
+    for (int i=0; i<iters; i++)
+    {
+            float res = buffer[index];
+            odata[index] = res;
+            index += num_compute_threads;
+    }
+    if (index < buffer_size)
+    {
+            float res = buffer[index];
+            odata[index] = res;
+    }
+  }
+}
+
 template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_TEMPLATE_PARAMS>
 __host__ bool run_experiment(void)
 {
@@ -133,10 +233,26 @@ __host__ bool run_experiment(void)
   switch (NUM_TEMPLATE_PARAMS)
   {
   case 3:
+    {
     dma_xfer_three<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,DMA_THREADS>
       <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
       (d_idata, d_odata, shared_buffer_size, num_compute_warps*WARP_SIZE);
     break;
+    }
+  case 2:
+    {
+    dma_xfer_two<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT>
+      <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+      (d_idata, d_odata, shared_buffer_size, num_compute_warps*WARP_SIZE, DMA_THREADS);
+    break;
+    }
+  case 1:
+    {
+    dma_xfer_one<ALIGNMENT,ALIGN_OFFSET>
+      <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+      (d_idata, d_odata, shared_buffer_size, num_compute_warps*WARP_SIZE, DMA_THREADS, BYTES_PER_ELMT);
+    break;
+    }
   default:
     assert(false);
   }

@@ -17,7 +17,7 @@
 /* 
  * SAXPY example code
  * 
- * Kernel descriptions:
+ * REFERENCE CODE VERSIONS FOR COMPARISON:
  *   saxpy_baseline: 
  *       Simplest possible SAXPY code (should achieve peak performance with max threads)
  *   saxpy_float4s:  
@@ -29,6 +29,8 @@
  *       Stage input data through shmem using __syncthreads, then process results
  *   saxpy_shmem_doublebuffer:
  *       Same as saxpy_shmem except with manual double buffering
+ * 
+ * CUDADMA EXAMPLE CODES:
  *   saxpy_cudaDMA:
  *       Uses cudaDMA library for staging data in shmem with separate DMA threads
  *   saxpy_cudaDMA_doublebuffer:
@@ -271,12 +273,10 @@ __global__ void saxpy_cudaDMA ( float* y, float* x, float a, clock_t * timer_val
   __shared__ float sdata_x0 [COMPUTE_THREADS_PER_CTA];
   __shared__ float sdata_y0 [COMPUTE_THREADS_PER_CTA];
 
-  cudaDMASequential<BYTES_PER_DMA_THREAD,16>
-    dma_ld_x_0 (1, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA, DMA_SZ);
-  cudaDMASequential<BYTES_PER_DMA_THREAD,16>
-    dma_ld_y_0 (2, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA + DMA_THREADS_PER_LD, DMA_SZ);
+  cudaDMASequential<16, DMA_SZ, DMA_THREADS_PER_LD>
+    dma_ld_x_0 (1, COMPUTE_THREADS_PER_CTA, COMPUTE_THREADS_PER_CTA );
+  cudaDMASequential<16, DMA_SZ, DMA_THREADS_PER_LD>
+    dma_ld_y_0 (2, COMPUTE_THREADS_PER_CTA, COMPUTE_THREADS_PER_CTA + DMA_THREADS_PER_LD );
 
   int tid = threadIdx.x ;
 
@@ -333,18 +333,14 @@ __global__ void saxpy_cudaDMA_doublebuffer ( float* y, float* x, float a, clock_
   __shared__ float sdata_y0 [COMPUTE_THREADS_PER_CTA];
   __shared__ float sdata_y1 [COMPUTE_THREADS_PER_CTA];
 
-  cudaDMASequential<BYTES_PER_DMA_THREAD,16>
-    dma_ld_x_0 (1, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA);
-  cudaDMASequential<BYTES_PER_DMA_THREAD,16>
-    dma_ld_y_0 (2, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA + DMA_THREADS_PER_LD);
-  cudaDMASequential<BYTES_PER_DMA_THREAD,16>
-    dma_ld_x_1 (3, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA + 2*DMA_THREADS_PER_LD);
-  cudaDMASequential<BYTES_PER_DMA_THREAD,16>
-    dma_ld_y_1 (4, DMA_THREADS_PER_LD, COMPUTE_THREADS_PER_CTA,
-		COMPUTE_THREADS_PER_CTA + 3*DMA_THREADS_PER_LD);
+  cudaDMASequential<16, DMA_SZ, DMA_THREADS_PER_LD>
+    dma_ld_x_0 (1, COMPUTE_THREADS_PER_CTA, COMPUTE_THREADS_PER_CTA);
+  cudaDMASequential<16, DMA_SZ, DMA_THREADS_PER_LD>
+    dma_ld_y_0 (2, COMPUTE_THREADS_PER_CTA, COMPUTE_THREADS_PER_CTA + DMA_THREADS_PER_LD);
+  cudaDMASequential<16, DMA_SZ, DMA_THREADS_PER_LD>
+    dma_ld_x_1 (3, COMPUTE_THREADS_PER_CTA, COMPUTE_THREADS_PER_CTA + 2*DMA_THREADS_PER_LD);
+  cudaDMASequential<16, DMA_SZ, DMA_THREADS_PER_LD>
+    dma_ld_y_1 (4, COMPUTE_THREADS_PER_CTA, COMPUTE_THREADS_PER_CTA + 3*DMA_THREADS_PER_LD);
 
   int tid = threadIdx.x ;
 

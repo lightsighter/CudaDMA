@@ -15,7 +15,7 @@
 #
 
 
-DEPS = params.h params_common.h ../../../include/cudaDMA.h saxpy_cudaDMA.cu saxpy_cudaDMA_kernel.cu
+DEPS = params.h params_common.h params_directed.h ../../../include/cudaDMA.h saxpy_cudaDMA.cu saxpy_cudaDMA_kernel.cu
 
 all: saxpy_cudaDMA
 

@@ -8,9 +8,12 @@ MAX_ELMT_SIZE=8192 # in floats
 MAX_NUM_ELMTS=32
 MAX_DMA_WARPS=16
 
-def run_experiment(alignment,offset,elem_size,num_elmts,dma_warps,num_templates,random_seed):
+def run_experiment(gather,alignment,offset,elem_size,num_elmts,dma_warps,num_templates,random_seed):
     f = open("params_directed.h",'w')
-    f.write("#define PARAM_GATHER true\n")
+    if gather:
+        f.write("#define PARAM_GATHER true\n")
+    else:
+        f.write("#define PARAM_GATHER false\n")
     f.write("#define PARAM_ALIGNMENT "+str(alignment)+"\n")
     f.write("#define PARAM_OFFSET "+str(offset)+"\n")
     f.write("#define PARAM_ELMT_SIZE "+str(elem_size*4)+"\n")
@@ -43,6 +46,7 @@ def run_random_experiments():
     #below = 0
     #for i in range(10000):
     while True:
+        gather = random.randint(0,1)
         alignment = random.sample([4,8,16],1)[0]   
         offset = 0
         if alignment==8:
@@ -67,7 +71,7 @@ def run_random_experiments():
         #    above += 1
         #else:
         #    below += 1
-        run_experiment(alignment,offset,elem_size,num_elems,warps,num_templates,random_seed)
+        run_experiment(gather,alignment,offset,elem_size,num_elems,warps,num_templates,random_seed)
     #print "Above "+str(above)+" Below "+str(below)
 
 def main():

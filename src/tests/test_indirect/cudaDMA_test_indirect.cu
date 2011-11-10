@@ -26,6 +26,8 @@
 #include <assert.h>
 #include <math.h>
 
+#include <set>
+
 #include "cuda.h"
 #include "cuda_runtime.h"
 
@@ -35,6 +37,8 @@
 #include "params_directed.h"
 
 #define WARP_SIZE 32
+
+#define MAX_TRIES 8192
 
 // includes, project
 
@@ -264,6 +268,161 @@ dma_gather_one(float *idata, float *odata, int *offsets, int buffer_size, int nu
 }
 
 template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS>
+__global__ void __launch_bounds__(1024,1)
+dma_scatter_four( float *odata, int *offsets, int buffer_size, int num_compute_threads)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMAIndirect<false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
+    dma0 (1, num_compute_threads,
+            num_compute_threads,
+            offsets);
+
+  if (dma0.owns_this_thread())
+  {
+    float *base_ptr = &(odata[ALIGN_OFFSET]);
+#ifdef CUDADMA_DEBUG_ON
+    dma0.wait_for_dma_start();
+    dma0.finish_async_dma();
+#else
+    dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+#endif
+  }
+  else
+  {
+    // Initialize the shared memory buffer
+    if (threadIdx.x == 0)
+    {
+      for (int i=0; i<buffer_size; i++)
+      {
+        buffer[i] = float(i);
+      }
+    }
+    dma0.start_async_dma();
+    dma0.wait_for_dma_start();
+    // No need to write anything back, it's already been done
+  }
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int DMA_THREADS>
+__global__ void __launch_bounds__(1024,1)
+dma_scatter_three( float *odata, int *offsets, int buffer_size, int num_compute_threads, int NUM_ELMTS)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMAIndirect<false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
+    dma0 (1, num_compute_threads,
+            num_compute_threads,
+            offsets,
+            NUM_ELMTS);
+
+  if (dma0.owns_this_thread())
+  {
+    float *base_ptr = &(odata[ALIGN_OFFSET]);
+#ifdef CUDADMA_DEBUG_ON
+    dma0.wait_for_dma_start();
+    dma0.finish_async_dma();
+#else
+    dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+#endif
+  }
+  else
+  {
+    // Initialize the shared memory buffer
+    if (threadIdx.x == 0)
+    {
+      for (int i=0; i<buffer_size; i++)
+      {
+        buffer[i] = float(i);
+      }
+    }
+    dma0.start_async_dma();
+    dma0.wait_for_dma_start();
+    // No need to write anything back, it's already been done
+  }
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT>
+__global__ void __launch_bounds__(1024,1)
+dma_scatter_two( float *odata, int *offsets, int buffer_size, int num_compute_threads, int num_dma_threads, int NUM_ELMTS)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMAIndirect<false,ALIGNMENT,BYTES_PER_ELMT>
+    dma0 (1, num_dma_threads,
+            num_compute_threads,
+            num_compute_threads,
+            offsets,
+            NUM_ELMTS);
+
+  if (dma0.owns_this_thread())
+  {
+    float *base_ptr = &(odata[ALIGN_OFFSET]);
+#ifdef CUDADMA_DEBUG_ON
+    dma0.wait_for_dma_start();
+    dma0.finish_async_dma();
+#else
+    dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+#endif
+  }
+  else
+  {
+    // Initialize the shared memory buffer
+    if (threadIdx.x == 0)
+    {
+      for (int i=0; i<buffer_size; i++)
+      {
+        buffer[i] = float(i);
+      }
+    }
+    dma0.start_async_dma();
+    dma0.wait_for_dma_start();
+    // No need to write anything back, it's already been done
+  }
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET>
+__global__ void __launch_bounds__(1024,1)
+dma_scatter_one( float *odata, int *offsets, int buffer_size, int num_compute_threads, int num_dma_threads, int bytes_per_elmt, int num_elmts)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMAIndirect<false,ALIGNMENT>
+    dma0 (1, num_dma_threads,
+            num_compute_threads,
+            num_compute_threads,
+            offsets,
+            bytes_per_elmt,
+            num_elmts);
+
+  if (dma0.owns_this_thread())
+  {
+    float *base_ptr = &(odata[ALIGN_OFFSET]);
+#ifdef CUDADMA_DEBUG_ON
+    dma0.wait_for_dma_start();
+    dma0.finish_async_dma();
+#else
+    dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+#endif
+  }
+  else
+  {
+    // Initialize the shared memory buffer
+    if (threadIdx.x == 0)
+    {
+      for (int i=0; i<buffer_size; i++)
+      {
+        buffer[i] = float(i);
+      }
+    }
+    dma0.start_async_dma();
+    dma0.wait_for_dma_start();
+    // No need to write anything back, it's already been done
+  }
+}
+
+
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS>
 __host__ bool run_gather_experiment(int *h_offsets, int max_index/*floats*/, int num_templates)
 {
   int shared_buffer_size = (NUM_ELMTS*BYTES_PER_ELMT/sizeof(float) + ALIGN_OFFSET);
@@ -385,6 +544,105 @@ __host__ bool run_gather_experiment(int *h_offsets, int max_index/*floats*/, int
   return pass;
 }
 
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS>
+__host__ bool run_scatter_experiment(int *h_offsets, int max_index/*floats*/, int num_templates)
+{
+  int shared_buffer_size = (NUM_ELMTS*BYTES_PER_ELMT/sizeof(float) + ALIGN_OFFSET);
+
+  // Check to see if we'll overflow the shared buffer
+  if ((shared_buffer_size*sizeof(float)) > 49152)
+    return true;
+
+  // Allocate the destination
+  int output_size = (max_index + ALIGN_OFFSET);
+  float *h_odata = (float*)malloc(output_size*sizeof(float));
+  for (int i = 0; i<output_size; i++)
+  {
+    h_odata[i] = 0.0f;
+  }
+
+  // Allocate device memory and copy down
+  float *d_odata;
+  CUDA_SAFE_CALL( cudaMalloc((void**)&d_odata, output_size*sizeof(float)));
+  CUDA_SAFE_CALL( cudaMemcpy(d_odata, h_odata, output_size*sizeof(float), cudaMemcpyHostToDevice));
+
+  // Copy down the offsets
+  int *d_offsets;
+  CUDA_SAFE_CALL( cudaMalloc((void**)&d_offsets, NUM_ELMTS*sizeof(int)));
+  CUDA_SAFE_CALL( cudaMemcpy(d_offsets, h_offsets, NUM_ELMTS*sizeof(int), cudaMemcpyHostToDevice));
+
+  int num_compute_warps = 1;
+  int total_threads = (num_compute_warps)*WARP_SIZE + DMA_THREADS;
+  switch (num_templates)
+  {
+    case 4:
+      {
+        dma_scatter_four<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT, NUM_ELMTS, DMA_THREADS>
+          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+          (d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE);
+        break;
+      }
+    case 3:
+      {
+        dma_scatter_three<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT, DMA_THREADS>
+          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+          (d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE,NUM_ELMTS);
+        break;
+      }
+    case 2:
+      {
+        dma_scatter_two<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT>
+          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+          (d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE,DMA_THREADS,NUM_ELMTS);
+        break;
+      }
+    case 1:
+      {
+        dma_scatter_one<ALIGNMENT, ALIGN_OFFSET>
+          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+          (d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE,DMA_THREADS,BYTES_PER_ELMT,NUM_ELMTS);
+        break;
+      }
+    default:
+      assert(false);
+      break;
+  }
+
+  CUDA_SAFE_CALL(cudaThreadSynchronize());
+
+  // Copy the data back
+  CUDA_SAFE_CALL(cudaMemcpy(h_odata, d_odata, output_size*sizeof(float), cudaMemcpyDeviceToHost));
+
+  // Check the result
+  bool pass = true;
+  for (int i = 0; i<NUM_ELMTS && pass; i++)
+  {
+    float out_value = ALIGN_OFFSET+i*BYTES_PER_ELMT/sizeof(float);
+    int out_index = ALIGN_OFFSET+(h_offsets[i]/sizeof(float));
+    for (int j = 0; j<(BYTES_PER_ELMT/sizeof(float)); j++)
+    {
+      if (h_odata[out_index] != (out_value+float(j)))
+      {
+        fprintf(stderr,"\nIndex %d of element %d was expecting %f but received %f\n", j, i, out_value+float(j), h_odata[out_index]);  
+        pass = false;
+        break;
+      }
+    }
+  }
+  if (!pass)
+  {
+    fprintf(stdout,"Result - %s\n",(pass?"SUCCESS":"FAILURE"));
+    fflush(stdout);
+  }
+  CUDA_SAFE_CALL(cudaFree(d_odata));
+  CUDA_SAFE_CALL(cudaFree(d_offsets));
+  free(h_odata);
+
+  total_experiments++;
+
+  return pass;
+}
+
 __host__
 int main()
 {
@@ -394,6 +652,7 @@ int main()
   // Initialize the random number generator
   srand(PARAM_RAND_SEED);
   printf("Offsets: ");
+#if 0
   for (int i = 0; i < PARAM_NUM_ELMTS; i++)
   {
     int off = (rand() % (1024)); 
@@ -405,11 +664,57 @@ int main()
     if ((off/int(sizeof(float))) > max_offset)
       max_offset = off;
   }
+#else
+  // We have to check for overlaps
+  {
+    int tries = 0; 
+    std::set<int> off_set;
+    int cnt = 0;
+    while (cnt < PARAM_NUM_ELMTS)
+    {
+      if (tries > MAX_TRIES)
+      {
+        // Give up if we can't find 
+        // good offsets
+        fprintf(stderr,"Warning: couldn't find good offsets, retry\n");
+        fflush(stderr);
+        return true;
+      }
+      tries++;
+      int off = (rand() % (262144));
+      off *= PARAM_ALIGNMENT;
+      // Check if the offset is good
+      bool good = true;
+      for (std::set<int>::iterator it = off_set.begin();
+            it != off_set.end(); it++)
+      {
+        if (!((off+PARAM_ELMT_SIZE) <= (*it)) && 
+            !(((*it)+PARAM_ELMT_SIZE) <= off))
+        {
+          good = false;
+          break;
+        }
+      }
+      if (good)
+      {
+        offsets[cnt++] = off;
+        printf("%d ", off);
+        if ((off/int(sizeof(float))) > max_offset)
+          max_offset = off/int(sizeof(float));
+        off_set.insert(off);
+      }
+    }
+  }
+#endif
   printf("\n");
   assert(max_offset != -1);
-  fprintf(stdout,"Experiment: ALIGNMENT-%2d OFFSET-%d ELMT_SIZE-%5d NUM_ELMTS-%2d DMA_WARPS-%2d NUM_TEMPLATES-%d ",PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS/32,PARAM_NUM_TEMPLATES); 
+  fprintf(stdout,"%s Experiment: ALIGNMENT-%2d OFFSET-%d ELMT_SIZE-%5d NUM_ELMTS-%2d DMA_WARPS-%2d NUM_TEMPLATES-%d ",(PARAM_GATHER?"GATHER":"SCATTER"),PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS/32,PARAM_NUM_TEMPLATES); 
   fflush(stdout);
-  bool result = run_gather_experiment<PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS>(offsets, max_offset+PARAM_ELMT_SIZE/sizeof(float),PARAM_NUM_TEMPLATES);
+  bool result;
+  if (PARAM_GATHER)
+    result = run_gather_experiment<PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS>(offsets, max_offset+PARAM_ELMT_SIZE/sizeof(float),PARAM_NUM_TEMPLATES);
+  else
+    result = run_gather_experiment<PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS>(offsets, max_offset+PARAM_ELMT_SIZE/sizeof(float),PARAM_NUM_TEMPLATES);
   fprintf(stdout,"RESULT: %s\n",(result?"SUCCESS":"FAILURE"));
   fflush(stdout);
 

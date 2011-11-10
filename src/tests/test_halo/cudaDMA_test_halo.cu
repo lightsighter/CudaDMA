@@ -30,7 +30,7 @@
 #include "cuda_runtime.h"
 
 //#define CUDADMA_DEBUG_ON
-#include "../../include/cudaDMA.h"
+#include "cudaDMA.h"
 
 #define WARP_SIZE 32
 

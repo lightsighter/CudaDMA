@@ -36,7 +36,7 @@
 all: test_halo
 
 test_halo:
-	nvcc -o test_halo -O2 -arch=compute_20 -code=sm_20 cudaDMA_test_halo.cu 
+	nvcc -I../../../include -o test_halo -O2 -arch=compute_20 -code=sm_20 cudaDMA_test_halo.cu 
 
 clean:
 	rm -f *.o test_halo

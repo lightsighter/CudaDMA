@@ -36,7 +36,7 @@
 all: test_strided
 
 test_strided:
-	nvcc -o test_strided -O2 -arch=compute_20 -code=sm_20 cudaDMA_test_strided.cu 
+	nvcc -I../../../include -o test_strided -O2 -arch=compute_20 -code=sm_20 cudaDMA_test_strided.cu 
 
 clean:
 	rm -f *.o test_strided

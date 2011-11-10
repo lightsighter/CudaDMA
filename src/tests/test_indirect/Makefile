@@ -36,7 +36,7 @@
 all: test_indirect
 
 test_indirect:
-	nvcc -o test_indirect -O2 -arch=compute_20 -code=sm_20 cudaDMA_test_indirect.cu 
+	nvcc -I../../../include -o test_indirect -O2 -arch=compute_20 -code=sm_20 cudaDMA_test_indirect.cu 
 
 clean:
 	rm -f *.o test_indirect

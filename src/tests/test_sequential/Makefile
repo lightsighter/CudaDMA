@@ -36,7 +36,7 @@
 all: test_sequential
 
 test_sequential:
-	nvcc -o test_sequential -O2 -arch=compute_20 -code=sm_20 cudaDMA_test_sequential.cu 
+	nvcc -I../../../include -o test_sequential -O2 -arch=compute_20 -code=sm_20 cudaDMA_test_sequential.cu 
 
 clean:
 	rm -f *.o test_sequential

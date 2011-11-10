@@ -1779,11 +1779,11 @@ template<int ALIGNMENT>
 class cudaDMAStrided<ALIGNMENT,0,0,0> : public cudaDMAStridedBase 
 {
 private:
-	int ELMT_LDS;
-	int DMA_ROW_ITERS_FULL;
-	int DMA_ROW_ITERS_SPLIT;
-	int DMA_COL_ITERS_FULL;
-	int DMA_COL_ITERS_SPLIT;
+	const int ELMT_LDS;
+	const int DMA_ROW_ITERS_FULL;
+	const int DMA_ROW_ITERS_SPLIT;
+	const int DMA_COL_ITERS_FULL;
+	const int DMA_COL_ITERS_SPLIT;
 public:
 	__device__ cudaDMAStrided(const int dmaID,
 				const int DMA_THREADS,
@@ -1865,9 +1865,9 @@ template<int ALIGNMENT, int BYTES_PER_ELMT>
 class cudaDMAStrided<ALIGNMENT,BYTES_PER_ELMT,0,0> : public cudaDMAStridedBase 
 {
 private:
-	int DMA_ROW_ITERS_FULL;
-	int DMA_ROW_ITERS_SPLIT;
-	int DMA_COL_ITERS_FULL;
+	const int DMA_ROW_ITERS_FULL;
+	const int DMA_ROW_ITERS_SPLIT;
+	const int DMA_COL_ITERS_FULL;
 public:
 	__device__ cudaDMAStrided(const int dmaID,
 				const int DMA_THREADS,
@@ -1943,9 +1943,9 @@ template<int ALIGNMENT, int BYTES_PER_ELMT, int DMA_THREADS>
 class cudaDMAStrided<ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,0> : public cudaDMAStridedBase 
 {
 private:
-	int DMA_ROW_ITERS_FULL;
-	int DMA_ROW_ITERS_SPLIT;
-	int DMA_COL_ITERS_FULL;
+	const int DMA_ROW_ITERS_FULL;
+	const int DMA_ROW_ITERS_SPLIT;
+	const int DMA_COL_ITERS_FULL;
 public:
 	__device__ cudaDMAStrided(const int dmaID,
 				const int num_compute_threads,
@@ -2069,6 +2069,132 @@ private:
                 offs,                                                                                                                           \
                 (SPLIT_ELMT ? ELMT_ID_SPLIT : ELMT_ID))
 
+#define INDIRECT_EXECUTE()                                                                                                                      \
+        if (ELMT_LDS == 1)                                                                                                                      \
+        {                                                                                                                                       \
+                char * src_row_ptr = ((char*)src_ptr) + this->dma_src_offset;                                                                   \
+		char * dst_row_ptr = ((char*)dst_ptr) + this->dma_dst_offset;                                                                   \
+		if (DMA_ROW_ITERS_SPLIT == 0)                                                                                                   \
+		{                                                                                                                               \
+			if (this->all_threads_active)                                                                                           \
+			{                                                                                                                       \
+				cudaDMAIndirectBase<GATHER>::template do_xfer_across_indirect<true>(src_row_ptr, dst_row_ptr,                   \
+                                                                  this->dma_split_partial_elmts, this->partial_bytes, 0);                       \
+			}                                                                                                                       \
+			else                                                                                                                    \
+			{                                                                                                                       \
+				CUDADMA_BASE::wait_for_dma_start();                                                                             \
+				if (this->dma_split_partial_elmts > 0)                                                                          \
+					cudaDMAIndirectBase<GATHER>::template do_xfer_across_indirect<false>(src_row_ptr, dst_row_ptr,          \
+                                                                  this->dma_split_partial_elmts, this->partial_bytes, 0);                       \
+			}                                                                                                                       \
+		}	                                                                                                                        \
+		else                                                                                                                            \
+		{                                                                                                                               \
+                        int offset_index = 0;                                                                                                   \
+			CUDADMA_BASE::wait_for_dma_start();                                                                                     \
+			for (int i=0; i<DMA_ROW_ITERS_SPLIT; i++)                                                                               \
+			{                                                                                                                       \
+				cudaDMAIndirectBase<GATHER>::template do_xfer_across_indirect<false>(src_row_ptr, dst_row_ptr,                  \
+                                                                MAX_LDS_OUTSTANDING_PER_THREAD, this->partial_bytes, offset_index);             \
+				src_row_ptr += (GATHER ? 0 : this->dma_src_row_iter_inc);                                                       \
+				dst_row_ptr += (GATHER ? this->dma_dst_row_iter_inc : 0);                                                       \
+                                offset_index += (GATHER ? this->dma_src_row_iter_inc : this->dma_dst_row_iter_inc);                             \
+			}                                                                                                                       \
+			if (this->dma_split_partial_elmts > 0)                                                                                  \
+				cudaDMAIndirectBase<GATHER>::template do_xfer_across_indirect<false>(src_row_ptr, dst_row_ptr,                  \
+                                                                this->dma_split_partial_elmts, this->partial_bytes, offset_index);              \
+		}                                                                                                                               \
+	}                                                                                                                                       \
+	else if (ELMT_LDS <= MAX_LDS_OUTSTANDING_PER_THREAD)                                                                                    \
+	{                                                                                                                                       \
+		char * src_row_ptr = ((char*)src_ptr) + this->dma_src_offset;                                                                   \
+		char * dst_row_ptr = ((char*)dst_ptr) + this->dma_dst_offset;                                                                   \
+		if (DMA_ROW_ITERS_SPLIT == 0)                                                                                                   \
+		{                                                                                                                               \
+			CUDADMA_BASE::wait_for_dma_start();                                                                                     \
+                        COPY_ACROSS_ELMTS1;                                                                                                     \
+		}                                                                                                                               \
+		else                                                                                                                            \
+		{                                                                                                                               \
+                        int offset_index = 0;                                                                                                   \
+			CUDADMA_BASE::wait_for_dma_start();                                                                                     \
+			for (int i=0; i<DMA_ROW_ITERS_SPLIT; i++)                                                                               \
+			{                                                                                                                       \
+                                COPY_ACROSS_ELMTS2;                                                                                             \
+				src_row_ptr += (GATHER ? 0 : this->dma_src_row_iter_inc);                                                       \
+				dst_row_ptr += (GATHER ? this->dma_dst_row_iter_inc : 0);                                                       \
+                                offset_index += (GATHER ? this->dma_src_row_iter_inc : this->dma_dst_row_iter_inc);                             \
+			}                                                                                                                       \
+			if (this->dma_split_partial_elmts > 0)                                                                                  \
+                                COPY_ACROSS_ELMTS3;                                                                                             \
+		}                                                                                                                               \
+	}                                                                                                                                       \
+	else                                                                                                                                    \
+	{                                                                                                                                       \
+		char * src_row_ptr = ((char*)src_ptr) + (GATHER ? 0 : this->dma_src_offset);                                                    \
+		char * dst_row_ptr = ((char*)dst_ptr) + (GATHER ? this->dma_dst_offset : 0);                                                    \
+		if (DMA_ROW_ITERS_FULL==0)                                                                                                      \
+		{                                                                                                                               \
+                        if (GATHER)                                                                                                             \
+                          src_row_ptr += this->offsets[this->init_elmt_id];                                                                     \
+                        else                                                                                                                    \
+                          dst_row_ptr += this->offsets[this->init_elmt_id];                                                                     \
+			if (DMA_COL_ITERS_FULL == 0)                                                                                            \
+			{                                                                                                                       \
+				int opt_xfer = (this->thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ?                                          \
+					(this->thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) :                                                 \
+					(this->thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0);                                            \
+				if (this->all_threads_active)                                                                                   \
+				{                                                                                                               \
+					if (this->warp_partial)                                                                                 \
+						CUDADMA_BASE::do_xfer<true,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);                        \
+					else                                                                                                    \
+						CUDADMA_BASE::wait_for_dma_start();                                                             \
+				}                                                                                                               \
+				else                                                                                                            \
+				{                                                                                                               \
+					CUDADMA_BASE::wait_for_dma_start();                                                                     \
+					if (this->warp_partial)                                                                                 \
+						CUDADMA_BASE::do_xfer<false,ALIGNMENT>(src_row_ptr,dst_row_ptr,opt_xfer);                       \
+				}                                                                                                               \
+			}                                                                                                                       \
+			else                                                                                                                    \
+			{                                                                                                                       \
+				CUDADMA_BASE::wait_for_dma_start();                                                                             \
+                                COPY_ELMT_FN;                                                                                                   \
+			}                                                                                                                       \
+		}                                                                                                                               \
+		else                                                                                                                            \
+		{                                                                                                                               \
+                        int offset_index = this->init_elmt_id;                                                                                  \
+			CUDADMA_BASE::wait_for_dma_start();                                                                                     \
+			if (this->warp_active)                                                                                                  \
+			{                                                                                                                       \
+				for (int i=0; i<DMA_ROW_ITERS_FULL; i++)                                                                        \
+				{                                                                                                               \
+                                        if (GATHER)                                                                                             \
+                                          src_row_ptr = ((char*)src_ptr) + this->offsets[offset_index] + (GATHER ? 0 : this->dma_src_offset);   \
+                                        else                                                                                                    \
+                                          dst_row_ptr = ((char*)dst_ptr) + this->offsets[offset_index] + (GATHER ? this->dma_dst_offset : 0);   \
+                                        COPY_ELMT_FN;                                                                                           \
+					src_row_ptr += (GATHER ? 0 : this->dma_src_row_iter_inc);                                               \
+					dst_row_ptr += (GATHER ? this->dma_dst_row_iter_inc : 0);                                               \
+                                        offset_index += (GATHER ? this->dma_src_row_iter_inc : this->dma_dst_row_iter_inc);                     \
+				}                                                                                                               \
+			}                                                                                                                       \
+			if (this->warp_partial)                                                                                                 \
+			{                                                                                                                       \
+                                if (GATHER)                                                                                                     \
+                                  src_row_ptr = ((char*)src_ptr) + this->offsets[offset_index] + (GATHER ? 0 : this->dma_src_offset);           \
+                                else                                                                                                            \
+                                  dst_row_ptr = ((char*)dst_ptr) + this->offsets[offset_index] + (GATHER ? this->dma_dst_offset : 0);           \
+                                COPY_ELMT_FN;                                                                                                   \
+			}                                                                                                                       \
+		}                                                                                                                               \
+	}                                                                                                                                       \
+	CUDADMA_BASE::finish_async_dma();
+
 
 template<bool GATHER=true, int ALIGNMENT=4, int BYTES_PER_ELMT=0, int DMA_THREADS=0, int NUM_ELMTS=0>
 class cudaDMAIndirect : public cudaDMAIndirectBase<GATHER> {
@@ -2116,12 +2242,18 @@ protected:
   __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
   {
 #ifdef INDIRECT_EXECUTE 
-	#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes)
-	#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes)
-	#define COPY_ELMT_FN copy_elmt<BULK_TYPE, DMA_COL_ITERS_FULL, ALIGNMENT>(src_row_ptr,dst_row_ptr)
+	#define COPY_ACROSS_ELMTS1 cudaDMAIndirectBase<GATHER>::template \
+          copy_across_elmts_indirect<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, this->dma_split_partial_elmts, this->partial_bytes, 0)
+	#define COPY_ACROSS_ELMTS2 cudaDMAIndirectBase<GATHER>::template \
+          copy_across_elmts_indirect<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, this->partial_bytes, offset_index)
+        #define COPY_ACROSS_ELMTS3 cudaDMAIndirectBase<GATHER>::template \
+          copy_across_elmts_indirect<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, this->dma_split_partial_elmts, this->partial_bytes, offset_index)
+	#define COPY_ELMT_FN cudaDMAStridedBase::template \
+          copy_elmt<BULK_TYPE, DMA_COL_ITERS_FULL, ALIGNMENT>(src_row_ptr,dst_row_ptr)
 	INDIRECT_EXECUTE()
 	#undef COPY_ACROSS_ELMTS1
 	#undef COPY_ACROSS_ELMTS2
+        #undef COPY_ACROSS_ELMTS3
 	#undef COPY_ELMT_FN
 #else
 	if (ELMT_LDS == 1) // Warp's load is striped over all elements
@@ -2263,6 +2395,215 @@ protected:
   }
 };
 
+template<bool GATHER, int ALIGNMENT>
+class cudaDMAIndirect<GATHER,ALIGNMENT,0,0,0> : public cudaDMAIndirectBase<GATHER> {
+private:
+    const int ELMT_LDS;
+    const int DMA_ROW_ITERS_FULL;
+    const int DMA_ROW_ITERS_SPLIT;
+    const int DMA_COL_ITERS_FULL;
+    const int DMA_COL_ITERS_SPLIT;
+public:
+    __device__ cudaDMAIndirect(const int dmaID,
+                              const int DMA_THREADS,
+                              const int num_compute_threads,
+                              const int dma_threadIdx_start,
+                              const int *offs,
+                              const int BYTES_PER_ELMT,
+                              const int NUM_ELMTS)
+      : INDIRECT_BASE,
+      ELMT_LDS (LDS_PER_ELMT_PER_THREAD),
+      DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
+      DMA_ROW_ITERS_SPLIT (ROW_ITERS_SPLIT),
+      DMA_COL_ITERS_FULL (COL_ITERS_FULL),
+      DMA_COL_ITERS_SPLIT (COL_ITERS_SPLIT)
+    {
+      cudaDMAIndirectBase<GATHER>::template initialize_indirect<ALIGNMENT>(LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,NUM_ELMTS,THREADS_PER_ELMT,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
+#ifdef CUDADMA_DEBUG_ON
+      DEBUG_PRINT;
+#endif
+    }
+public:
+  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  {
+    switch (ALIGNMENT)
+    {
+      case 4:
+        {
+          execute_internal<float>(src_ptr,dst_ptr);
+          break;
+        }
+      case 8:
+        {
+          execute_internal<float2>(src_ptr,dst_ptr);
+          break;
+        }
+      case 16:
+        {
+          execute_internal<float4>(src_ptr,dst_ptr);
+          break;
+        }
+#ifdef CUDADMA_DEBUG_ON
+      default:
+        printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
+        break;
+#endif
+    }
+  }
+protected:
+  template<typename BULK_TYPE>
+  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+  {
+    #define COPY_ACROSS_ELMTS1 cudaDMAIndirectBase<GATHER>::template \
+      copy_across_elmts_indirect<BULK_TYPE>(src_row_ptr, dst_row_ptr, this->dma_split_partial_elmts, this->partial_bytes, DMA_COL_ITERS_SPLIT, 0)
+    #define COPY_ACROSS_ELMTS2 cudaDMAIndirectBase<GATHER>::template \
+      copy_across_elmts_indirect<BULK_TYPE>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, this->partial_bytes, DMA_COL_ITERS_SPLIT, offset_index)
+    #define COPY_ACROSS_ELMTS3 cudaDMAIndirectBase<GATHER>::template \
+      copy_across_elmts_indirect<BULK_TYPE>(src_row_ptr, dst_row_ptr, this->dma_split_partial_elmts, this->partial_bytes, DMA_COL_ITERS_SPLIT, offset_index)
+    #define COPY_ELMT_FN cudaDMAStridedBase::template \
+      copy_elmt<BULK_TYPE, ALIGNMENT>(src_row_ptr,dst_row_ptr, DMA_COL_ITERS_FULL)
+    INDIRECT_EXECUTE()
+    #undef COPY_ACROSS_ELMTS1
+    #undef COPY_ACROSS_ELMTS2
+    #undef COPY_ACROSS_ELMTS3
+    #undef COPY_ELMT_FN
+  }
+};
+
+template<bool GATHER, int ALIGNMENT, int BYTES_PER_ELMT>
+class cudaDMAIndirect<GATHER,ALIGNMENT,BYTES_PER_ELMT,0,0> : public cudaDMAIndirectBase<GATHER> {
+private:
+    const int DMA_ROW_ITERS_FULL;
+    const int DMA_ROW_ITERS_SPLIT;
+    const int DMA_COL_ITERS_FULL;
+public:
+    __device__ cudaDMAIndirect(const int dmaID,
+                              const int DMA_THREADS,
+                              const int num_compute_threads,
+                              const int dma_threadIdx_start,
+                              const int *offs,
+                              const int NUM_ELMTS)
+      : INDIRECT_BASE,
+      DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
+      DMA_ROW_ITERS_SPLIT (ROW_ITERS_SPLIT),
+      DMA_COL_ITERS_FULL (COL_ITERS_FULL)
+    {
+      cudaDMAIndirectBase<GATHER>::template initialize_indirect<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
+    }
+public:
+  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  {
+    switch (ALIGNMENT)
+    {
+      case 4:
+        {
+            execute_internal<float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+            break;
+        }
+      case 8:
+        {
+            execute_internal<float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+            break;
+        }
+      case 16:
+        {
+            execute_internal<float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+            break;
+        }
+#ifdef CUDADMA_DEBUG_ON
+      default:
+            printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
+            break;
+#endif
+    }
+  }
+protected:
+  template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
+  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+  {
+    #define COPY_ACROSS_ELMTS1 cudaDMAIndirectBase<GATHER>::template \
+      copy_across_elmts_indirect<BULK_TYPE>(src_row_ptr, dst_row_ptr, this->dma_split_partial_elmts, this->partial_bytes, DMA_COL_ITERS_SPLIT, 0)
+    #define COPY_ACROSS_ELMTS2 cudaDMAIndirectBase<GATHER>::template \
+      copy_across_elmts_indirect<BULK_TYPE>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, this->partial_bytes, DMA_COL_ITERS_SPLIT, offset_index)
+    #define COPY_ACROSS_ELMTS3 cudaDMAIndirectBase<GATHER>::template \
+      copy_across_elmts_indirect<BULK_TYPE>(src_row_ptr, dst_row_ptr, this->dma_split_partial_elmts, this->partial_bytes, DMA_COL_ITERS_SPLIT, offset_index)
+    #define COPY_ELMT_FN cudaDMAIndirectBase<GATHER>::template \
+      copy_elmt<BULK_TYPE, ALIGNMENT>(src_row_ptr,dst_row_ptr,DMA_COL_ITERS_FULL)
+    INDIRECT_EXECUTE()
+    #undef COPY_ACROSS_ELMTS1
+    #undef COPY_ACROSS_ELMTS2
+    #undef COPY_ACROSS_ELMTS3
+    #undef COPY_ELMT_FN
+  }
+};
+
+template<bool GATHER, int ALIGNMENT, int BYTES_PER_ELMT, int DMA_THREADS>
+class cudaDMAIndirect<GATHER,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,0> : public cudaDMAIndirectBase<GATHER> {
+private:
+    const int DMA_ROW_ITERS_FULL;
+    const int DMA_ROW_ITERS_SPLIT;
+    const int DMA_COL_ITERS_FULL;
+public:
+    __device__ cudaDMAIndirect(const int dmaID,
+                              const int num_compute_threads,
+                              const int dma_threadIdx_start,
+                              const int *offs,
+                              const int NUM_ELMTS)
+      : INDIRECT_BASE,
+      DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
+      DMA_ROW_ITERS_SPLIT (ROW_ITERS_SPLIT),
+      DMA_COL_ITERS_FULL (COL_ITERS_FULL)
+    {
+      cudaDMAIndirectBase<GATHER>::template initialize_indirect<ALIGNMENT, LDS_PER_ELMT_PER_THREAD, BYTES_PER_ELMT, THREADS_PER_ELMT>(NUM_ELMTS, WARPS_PER_ELMT, COL_ITERS_FULL, CUDADMA_WARP_TID); 
+    }
+public:
+  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  {
+    switch (ALIGNMENT)
+    {
+      case 4:
+        {
+          execute_internal<float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr,dst_ptr);
+          break;
+        }
+      case 8:
+        {
+          execute_internal<float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr,dst_ptr);
+          break;
+        }
+      case 16:
+        {
+          execute_internal<float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr,dst_ptr);
+          break;
+        }
+#ifdef CUDADMA_DEBUG_ON
+      default:
+          printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
+          break;
+#endif
+    }
+  }
+protected:
+  template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
+  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+  {
+    #define COPY_ACROSS_ELMTS1 cudaDMAIndirectBase<GATHER>::template \
+      copy_across_elmts_indirect<BULK_TYPE>(src_row_ptr, dst_row_ptr, this->dma_split_partial_elmts, this->partial_bytes, DMA_COL_ITERS_SPLIT, 0)
+    #define COPY_ACROSS_ELMTS2 cudaDMAIndirectBase<GATHER>::template \
+      copy_across_elmts_indirect<BULK_TYPE>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, this->partial_bytes, DMA_COL_ITERS_SPLIT, offset_index)
+    #define COPY_ACROSS_ELMTS3 cudaDMAIndirectBase<GATHER>::template \
+      copy_across_elmts_indirect<BULK_TYPE>(src_row_ptr, dst_row_ptr, this->dma_split_partial_elmts, this->partial_bytes, DMA_COL_ITERS_SPLIT, offset_index)
+    #define COPY_ELMT_FN cudaDMAStridedBase::template \
+      copy_elmt<BULK_TYPE, ALIGNMENT>(src_row_ptr,dst_row_ptr,DMA_COL_ITERS_FULL)
+    INDIRECT_EXECUTE()
+    #undef COPY_ACROSS_ELMTS1
+    #undef COPY_ACROSS_ELMTS2 
+    #undef COPY_ACROSS_ELMTS3
+    #undef COPY_ELMT_FN
+  }
+};
+
+#undef INDIRECT_EXECUTE
 #undef SRC_STRIDE
 #undef DST_STRIDE
 #undef INDIRECT_BASE

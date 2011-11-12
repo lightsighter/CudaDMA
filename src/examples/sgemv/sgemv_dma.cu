@@ -69,12 +69,12 @@
 
 #include "../../../include/cudaDMA.h"
 
+#define SIZE_N	        896
+#define SIZE_M		SIZE_N
+
+// These defines are only used in the non-DMA version
 #define num_threads 128
 #define sgemv_bs 32
-#define threadSize 128
-
-#define SIZE_N	        128
-#define SIZE_M		SIZE_N
 
 #ifdef VEC_SINGLE
 #define DMA_KERNEL			sgemvn_cuda_dma_vec_single
@@ -102,7 +102,7 @@
 
 #ifdef BOTH_SINGLE
 #define DMA_KERNEL			sgemvn_cuda_dma_both_single
-#define COMPUTE_THREADS_PER_CTA		128	
+#define COMPUTE_THREADS_PER_CTA	        128
 #define DMA_THREADS_PER_LD		32
 #define DMA_LDS				5
 #define VEC_ELMTS			32	
@@ -131,6 +131,8 @@
 #define DMA_LDS				8	
 #define VEC_ELMTS			32	
 #endif
+
+
 
 
 #define TOSTRING_(x)	#x
@@ -373,7 +375,7 @@ sgemvn_cuda_dma_both_single(int n, int m, int n1, float alpha, float *A, int lda
 	}
 	else if (dma_ld_1.owns_this_thread())
 	{
-	  int ind = blockIdx.x*num_threads;
+	  int ind = blockIdx.x*COMPUTE_THREADS_PER_CTA;
 	  A += ind;
 		for (int idx=0; idx<n1; idx += VEC_ELMTS)
 		{
@@ -463,7 +465,7 @@ sgemvn_cuda_dma_both_double(int n, int m, int n1, float alpha, float *A, int lda
 	}
 	else if (dma_ld_2.owns_this_thread())
 	{
-	  int ind = blockIdx.x*num_threads;
+	  int ind = blockIdx.x**COMPUTE_THREADS_PER_CTA;
 	  A += ind;
 		for (int idx=0; idx<n1; idx += (VEC_ELMTS*2))
 		{
@@ -474,7 +476,7 @@ sgemvn_cuda_dma_both_double(int n, int m, int n1, float alpha, float *A, int lda
 	}
 	else if (dma_ld_3.owns_this_thread())
 	{
-	  int ind = blockIdx.x*num_threads + lda*VEC_ELMTS;
+	  int ind = blockIdx.x**COMPUTE_THREADS_PER_CTA + lda*VEC_ELMTS;
 	  A += ind;
 		for (int i=0; i<n1; i += (VEC_ELMTS*2))
 		{
@@ -545,28 +547,26 @@ sgemvn_cuda_dma_both_manual(int n, int m, int n1, float alpha, float *A, int lda
 	}
 	else if (dma_ld_0.owns_this_thread())
 	{
-		for (int idx=0; idx<n1; idx += (VEC_ELMTS))
+		for (int idx=0; idx<n1; idx += (2*VEC_ELMTS))
 		{
 			dma_ld_0.execute_dma(x,buff0);
 			x += VEC_ELMTS;
 			dma_ld_1.execute_dma(x,buff1);
 			x += VEC_ELMTS;
-			idx += VEC_ELMTS;
 		}	
 		dma_ld_0.wait_for_dma_start();
 		dma_ld_1.wait_for_dma_start();
 	}
 	else if (dma_ld_2.owns_this_thread())
 	{
-	  int ind = blockIdx.x*num_threads;
+	  int ind = blockIdx.x*COMPUTE_THREADS_PER_CTA;
 	  A += ind;
-		for (int idx=0; idx<n1; idx += (VEC_ELMTS))
+		for (int idx=0; idx<n1; idx += (2*VEC_ELMTS))
 		{
 			dma_ld_2.execute_dma(A,mat0);
 			A += (lda*VEC_ELMTS);
 			dma_ld_3.execute_dma(A,mat1);
 			A += (lda*VEC_ELMTS);
-			idx += VEC_ELMTS;
 		}
 		dma_ld_2.wait_for_dma_start();
 		dma_ld_3.wait_for_dma_start();

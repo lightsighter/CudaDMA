@@ -834,6 +834,7 @@ public:
   }
 };
 
+// three template parameters (false)
 template<int ALIGNMENT, int BYTES_PER_ELMT, int DMA_THREADS>
 class cudaDMASequential<false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS> : public CUDADMA_BASE {
 private:
@@ -885,6 +886,7 @@ public:
   }
 };
 
+// one template parameter (true)
 template<int ALIGNMENT>
 class cudaDMASequential<true,ALIGNMENT,0,0> : public CUDADMA_BASE
 {
@@ -943,6 +945,7 @@ public:
   }
 };
 
+// one template parameter (false)
 template<int ALIGNMENT>
 class cudaDMASequential<false,ALIGNMENT,0,0> : public CUDADMA_BASE
 {
@@ -1001,6 +1004,7 @@ public:
   }
 };
 
+// two template parameters (true)
 template<int ALIGNMENT, int BYTES_PER_ELMT>
 class cudaDMASequential<true,ALIGNMENT,BYTES_PER_ELMT,0> : public CUDADMA_BASE
 {
@@ -1056,6 +1060,7 @@ public:
   }
 };
 
+// two template parameters (false)
 template<int ALIGNMENT, int BYTES_PER_ELMT>
 class cudaDMASequential<false,ALIGNMENT,BYTES_PER_ELMT,0> : public CUDADMA_BASE
 {
@@ -1820,7 +1825,7 @@ public:
 		(NUM_ELMTS==ELMT_PER_STEP ? int(ELMT_ID) < ELMT_PER_STEP : int(ELMT_ID) < (NUM_ELMTS%ELMT_PER_STEP)),				\
 		(PARTIAL_ELMTS))
 
-#define STRIDED_EXECUTE()							\
+#define STRIDED_EXECUTE(DO_SYNC)						\
 	if (ELMT_LDS == 1) 							\
 	{									\
 		char * src_row_ptr = ((char*)src_ptr) + dma_src_offset;		\
@@ -1925,7 +1930,7 @@ public:
 	if (DO_SYNC) CUDADMA_BASE::finish_async_dma();
 
 
-template<bool DO_SYNC=true, int ALIGNMENT = 4, int BYTES_PER_ELMT = 0, int DMA_THREADS = 0, int NUM_ELMTS = 0>
+template<bool DO_SYNC, int ALIGNMENT, int BYTES_PER_ELMT = 0, int DMA_THREADS = 0, int NUM_ELMTS = 0>
 class cudaDMAStrided : public cudaDMAStridedBase 
 {
 public:
@@ -1984,7 +1989,7 @@ private:
 	#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes)
 	#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes)
 	#define COPY_ELMT_FN copy_elmt<BULK_TYPE, DMA_COL_ITERS_FULL, ALIGNMENT>(src_row_ptr,dst_row_ptr)
-	STRIDED_EXECUTE()
+	STRIDED_EXECUTE(DO_SYNC)
 	#undef COPY_ACROSS_ELMTS1
 	#undef COPY_ACROSS_ELMTS2
 	#undef COPY_ELMT_FN
@@ -2110,9 +2115,75 @@ private:
   }
 };
 
-// One template parameter for alignment only
-template<bool DO_SYNC, int ALIGNMENT>
-class cudaDMAStrided<DO_SYNC,ALIGNMENT,0,0,0> : public cudaDMAStridedBase 
+// four template parameters (false)
+template<int ALIGNMENT, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
+class cudaDMAStrided<false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : public cudaDMAStridedBase 
+{
+public:
+  // Constructor for when dst_stride == BYTES_PER_ELMT
+  __device__ cudaDMAStrided (const int dmaID,
+                             const int el_stride,
+			     const int num_compute_threads=0,
+			     const int dma_threadIdx_start=0)
+		: SINGLE_STRIDED_BASE
+	{
+		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,NUM_ELMTS,THREADS_PER_ELMT,WARPS_PER_ELMT,COL_ITERS_FULL>(CUDADMA_WARP_TID);
+	}
+  // Constructor for explicit destination stride
+  __device__ cudaDMAStrided (const int dmaID,
+                             const int src_stride,
+                             const int dst_stride,
+			     const int num_compute_threads=0,
+			     const int dma_threadIdx_start=0)
+		: DOUBLE_STRIDED_BASE
+	{
+		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,NUM_ELMTS,THREADS_PER_ELMT,WARPS_PER_ELMT,COL_ITERS_FULL>(CUDADMA_WARP_TID);
+	}
+
+public:
+  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  {
+	switch (ALIGNMENT)
+	{
+	  case 4:
+	    {
+		execute_internal<float,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+		break;
+	    }
+	  case 8:
+	    {
+		execute_internal<float2,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+		break;
+	    }
+	  case 16:
+	    {
+		execute_internal<float4,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+		break;
+	    }
+#ifdef CUDADMA_DEBUG_ON
+	  default:
+		printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
+		break;
+#endif
+	}
+  }
+private:
+  template<typename BULK_TYPE, int ELMT_LDS, int DMA_ROW_ITERS_FULL, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_FULL, int DMA_COL_ITERS_SPLIT>
+  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+  {
+	#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes)
+	#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes)
+	#define COPY_ELMT_FN copy_elmt<BULK_TYPE, DMA_COL_ITERS_FULL, ALIGNMENT>(src_row_ptr,dst_row_ptr)
+	STRIDED_EXECUTE(false)
+	#undef COPY_ACROSS_ELMTS1
+	#undef COPY_ACROSS_ELMTS2
+	#undef COPY_ELMT_FN
+  }
+};
+
+// One template parameter for alignment only (true)
+template<int ALIGNMENT>
+class cudaDMAStrided<true,ALIGNMENT,0,0,0> : public cudaDMAStridedBase 
 {
 private:
 	const int ELMT_LDS;
@@ -2190,16 +2261,103 @@ private:
 		#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes, DMA_COL_ITERS_SPLIT)
 		#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes, DMA_COL_ITERS_SPLIT)
 		#define COPY_ELMT_FN copy_elmt<BULK_TYPE, ALIGNMENT>(src_row_ptr,dst_row_ptr, DMA_COL_ITERS_FULL)
-		STRIDED_EXECUTE()
+		STRIDED_EXECUTE(true)
 		#undef COPY_ACROSS_ELMTS1
 		#undef COPY_ACROSS_ELMTS2
 		#undef COPY_ELMT_FN
 	}
 };
 
-// Two template parameters for alignment and element size
-template<bool DO_SYNC, int ALIGNMENT, int BYTES_PER_ELMT>
-class cudaDMAStrided<DO_SYNC,ALIGNMENT,BYTES_PER_ELMT,0,0> : public cudaDMAStridedBase 
+// one template parameter (false)
+template<int ALIGNMENT>
+class cudaDMAStrided<false,ALIGNMENT,0,0,0> : public cudaDMAStridedBase 
+{
+private:
+	const int ELMT_LDS;
+	const int DMA_ROW_ITERS_FULL;
+	const int DMA_ROW_ITERS_SPLIT;
+	const int DMA_COL_ITERS_FULL;
+	const int DMA_COL_ITERS_SPLIT;
+public:
+	__device__ cudaDMAStrided(const int dmaID,
+				const int DMA_THREADS,
+                                const int BYTES_PER_ELMT,
+				const int NUM_ELMTS,
+				const int el_stride,
+                                const int num_compute_threads=0,
+				const int dma_threadIdx_start=0)
+		: SINGLE_STRIDED_BASE,
+		ELMT_LDS (LDS_PER_ELMT_PER_THREAD),
+		DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
+		DMA_ROW_ITERS_SPLIT (ROW_ITERS_SPLIT),
+		DMA_COL_ITERS_FULL (COL_ITERS_FULL),
+		DMA_COL_ITERS_SPLIT (COL_ITERS_SPLIT)
+	{
+		initialize_strided<ALIGNMENT>(LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,NUM_ELMTS,THREADS_PER_ELMT,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
+	}
+
+	__device__ cudaDMAStrided(const int dmaID,
+				const int DMA_THREADS,
+                                const int BYTES_PER_ELMT,
+				const int NUM_ELMTS,
+				const int src_stride,
+				const int dst_stride,
+                                const int num_compute_threads=0,
+				const int dma_threadIdx_start=0)
+		: DOUBLE_STRIDED_BASE,
+		ELMT_LDS (LDS_PER_ELMT_PER_THREAD),
+		DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
+		DMA_ROW_ITERS_SPLIT (ROW_ITERS_SPLIT),
+		DMA_COL_ITERS_FULL (COL_ITERS_FULL),
+		DMA_COL_ITERS_SPLIT (COL_ITERS_SPLIT)
+	{
+		initialize_strided<ALIGNMENT>(LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,NUM_ELMTS,THREADS_PER_ELMT,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
+	}
+public:
+	__device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+	{
+		switch (ALIGNMENT)
+		{
+		  case 4:
+		    {
+			execute_internal<float>(src_ptr, dst_ptr);
+			break;
+		    }
+		  case 8:
+		    {
+			execute_internal<float2>(src_ptr, dst_ptr);
+			break;
+		    }
+		  case 16:
+		    {
+			execute_internal<float4>(src_ptr, dst_ptr);
+			break;
+		    }
+#ifdef CUDADMA_DEBUG_ON
+		  default:
+			printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
+			break;
+#endif
+		}
+	}
+
+private:
+	template<typename BULK_TYPE>
+	__device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+	{
+		#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes, DMA_COL_ITERS_SPLIT)
+		#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes, DMA_COL_ITERS_SPLIT)
+		#define COPY_ELMT_FN copy_elmt<BULK_TYPE, ALIGNMENT>(src_row_ptr,dst_row_ptr, DMA_COL_ITERS_FULL)
+		STRIDED_EXECUTE(false)
+		#undef COPY_ACROSS_ELMTS1
+		#undef COPY_ACROSS_ELMTS2
+		#undef COPY_ELMT_FN
+	}
+};
+
+// Two template parameters for alignment and element size (true)
+template<int ALIGNMENT, int BYTES_PER_ELMT>
+class cudaDMAStrided<true,ALIGNMENT,BYTES_PER_ELMT,0,0> : public cudaDMAStridedBase 
 {
 private:
 	const int DMA_ROW_ITERS_FULL;
@@ -2268,16 +2426,94 @@ private:
 		#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes)
 		#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes)
 		#define COPY_ELMT_FN copy_elmt<BULK_TYPE, ALIGNMENT>(src_row_ptr,dst_row_ptr,DMA_COL_ITERS_FULL)
-		STRIDED_EXECUTE()
+		STRIDED_EXECUTE(true)
 		#undef COPY_ACROSS_ELMTS1
 		#undef COPY_ACROSS_ELMTS2
 		#undef COPY_ELMT_FN
 	}
 };
 
-// Three template parameters for alignment, element size, and dma threads
-template<bool DO_SYNC, int ALIGNMENT, int BYTES_PER_ELMT, int DMA_THREADS>
-class cudaDMAStrided<DO_SYNC,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,0> : public cudaDMAStridedBase 
+// Two template parameters for alignment and element size (false)
+template<int ALIGNMENT, int BYTES_PER_ELMT>
+class cudaDMAStrided<false,ALIGNMENT,BYTES_PER_ELMT,0,0> : public cudaDMAStridedBase 
+{
+private:
+	const int DMA_ROW_ITERS_FULL;
+	const int DMA_ROW_ITERS_SPLIT;
+	const int DMA_COL_ITERS_FULL;
+public:
+	__device__ cudaDMAStrided(const int dmaID,
+				const int DMA_THREADS,
+                                const int NUM_ELMTS,
+				const int el_stride,
+                                const int num_compute_threads=0,
+				const int dma_threadIdx_start=0)
+		: SINGLE_STRIDED_BASE,
+		DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
+		DMA_ROW_ITERS_SPLIT (ROW_ITERS_SPLIT),
+		DMA_COL_ITERS_FULL (COL_ITERS_FULL)
+	{
+		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
+	}
+
+	__device__ cudaDMAStrided(const int dmaID,
+				const int DMA_THREADS,
+                                const int NUM_ELMTS,
+				const int src_stride,
+				const int dst_stride,
+                                const int num_compute_threads=0,
+				const int dma_threadIdx_start=0)
+		: DOUBLE_STRIDED_BASE,
+		DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
+		DMA_ROW_ITERS_SPLIT (ROW_ITERS_SPLIT),
+		DMA_COL_ITERS_FULL (COL_ITERS_FULL)
+	{
+		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
+	}
+public:
+	__device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+	{
+		switch (ALIGNMENT)
+		{
+		  case 4:
+		    {
+			execute_internal<float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+			break;
+		    }
+		  case 8:
+		    {
+			execute_internal<float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+			break;
+		    }
+		  case 16:
+		    {
+			execute_internal<float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+			break;
+		    }
+#ifdef CUDADMA_DEBUG_ON
+		  default:
+			printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
+			break;
+#endif
+		}
+	}
+private:
+	template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
+	__device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+	{
+		#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes)
+		#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes)
+		#define COPY_ELMT_FN copy_elmt<BULK_TYPE, ALIGNMENT>(src_row_ptr,dst_row_ptr,DMA_COL_ITERS_FULL)
+		STRIDED_EXECUTE(false)
+		#undef COPY_ACROSS_ELMTS1
+		#undef COPY_ACROSS_ELMTS2
+		#undef COPY_ELMT_FN
+	}
+};
+
+// Three template parameters for alignment, element size, and dma threads (true)
+template<int ALIGNMENT, int BYTES_PER_ELMT, int DMA_THREADS>
+class cudaDMAStrided<true,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,0> : public cudaDMAStridedBase 
 {
 private:
 	const int DMA_ROW_ITERS_FULL;
@@ -2344,7 +2580,83 @@ private:
 		#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes)
 		#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes)
 		#define COPY_ELMT_FN copy_elmt<BULK_TYPE, ALIGNMENT>(src_row_ptr,dst_row_ptr, DMA_COL_ITERS_FULL)
-		STRIDED_EXECUTE()
+		STRIDED_EXECUTE(true)
+		#undef COPY_ACROSS_ELMTS1
+		#undef COPY_ACROSS_ELMTS2
+		#undef COPY_ELMT_FN
+	}
+};
+
+// Three template parameters for alignment, element size, and dma threads (false)
+template<int ALIGNMENT, int BYTES_PER_ELMT, int DMA_THREADS>
+class cudaDMAStrided<false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,0> : public cudaDMAStridedBase 
+{
+private:
+	const int DMA_ROW_ITERS_FULL;
+	const int DMA_ROW_ITERS_SPLIT;
+	const int DMA_COL_ITERS_FULL;
+public:
+	__device__ cudaDMAStrided(const int dmaID,
+                                const int NUM_ELMTS,
+				const int el_stride,
+                                const int num_compute_threads=0,
+				const int dma_threadIdx_start=0)
+		: SINGLE_STRIDED_BASE,
+		DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
+		DMA_ROW_ITERS_SPLIT (ROW_ITERS_SPLIT),
+		DMA_COL_ITERS_FULL (COL_ITERS_FULL)
+	{
+		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
+	}
+
+	__device__ cudaDMAStrided(const int dmaID,
+                                const int NUM_ELMTS,
+				const int src_stride,
+				const int dst_stride,
+                                const int num_compute_threads=0,
+				const int dma_threadIdx_start=0)
+		: DOUBLE_STRIDED_BASE,
+		DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
+		DMA_ROW_ITERS_SPLIT (ROW_ITERS_SPLIT),
+		DMA_COL_ITERS_FULL (COL_ITERS_FULL)
+	{
+		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
+	}
+public:
+	__device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+	{
+		switch (ALIGNMENT)
+		{
+		  case 4:
+		    {
+			execute_internal<float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+			break;
+		    }
+		  case 8:
+		    {
+			execute_internal<float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+			break;
+		    }
+		  case 16:
+		    {
+			execute_internal<float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+			break;
+		    }
+#ifdef CUDADMA_DEBUG_ON
+		  default:
+			printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
+			break;
+#endif
+		}
+	}
+private:
+	template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
+	__device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+	{
+		#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes)
+		#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes)
+		#define COPY_ELMT_FN copy_elmt<BULK_TYPE, ALIGNMENT>(src_row_ptr,dst_row_ptr, DMA_COL_ITERS_FULL)
+		STRIDED_EXECUTE(false)
 		#undef COPY_ACROSS_ELMTS1
 		#undef COPY_ACROSS_ELMTS2
 		#undef COPY_ELMT_FN

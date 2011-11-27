@@ -568,7 +568,7 @@ class cudaDMA {
 	}                                                                   \
       } 
 
-#define SEQUENTIAL_EXECUTE(BYTES_PER_ELMT,DMA_THREADS)                      \
+#define SEQUENTIAL_EXECUTE(DO_SYNC,BYTES_PER_ELMT,DMA_THREADS)                      \
       int this_thread_bytes = is_active_thread ? partial_thread_bytes : is_partial_thread ? partial_thread_bytes : 0; \
       if (DO_SYNC && ((((BYTES_PER_ELMT-1)/(DMA_THREADS*MAX_BYTES_OUTSTANDING_PER_THREAD))>0) || (!((BYTES_PER_ELMT % (ALIGNMENT*DMA_THREADS))==0)))) { \
         CUDADMA_BASE::wait_for_dma_start();                                 \
@@ -629,7 +629,7 @@ class cudaDMA {
       CUDADMA_BASE::finish_async_dma();
 
 
-template<bool DO_SYNC=true, int ALIGNMENT=4, int BYTES_PER_ELMT=0, int DMA_THREADS=0>
+template<bool DO_SYNC, int ALIGNMENT, int BYTES_PER_ELMT=0, int DMA_THREADS=0>
 class cudaDMASequential : public CUDADMA_BASE {
 private:
   bool is_active_thread;   // If true, then all of BYTES_PER_THREAD will be transferred for this thread
@@ -736,7 +736,7 @@ public:
 	*/
 #endif
 #ifdef SEQUENTIAL_EXECUTE
-    SEQUENTIAL_EXECUTE(BYTES_PER_ELMT,DMA_THREADS);
+    SEQUENTIAL_EXECUTE(DO_SYNC,BYTES_PER_ELMT,DMA_THREADS);
 #else
     //int this_thread_bytes = is_active_thread ? BYTES_PER_THREAD : is_partial_thread ? partial_thread_bytes : 0;
     int this_thread_bytes = is_active_thread ? partial_thread_bytes : is_partial_thread ? partial_thread_bytes : 0;
@@ -834,8 +834,59 @@ public:
   }
 };
 
-template<bool DO_SYNC, int ALIGNMENT>
-class cudaDMASequential<DO_SYNC,ALIGNMENT,0,0> : public CUDADMA_BASE
+template<int ALIGNMENT, int BYTES_PER_ELMT, int DMA_THREADS>
+class cudaDMASequential<false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS> : public CUDADMA_BASE {
+private:
+  bool is_active_thread;   // If true, then all of BYTES_PER_THREAD will be transferred for this thread
+  bool is_partial_thread;  // If true, then only some of BYTES_PER_THREAD will be transferred for this thread
+  int partial_thread_bytes;
+public:
+  __device__ cudaDMASequential (const int dmaID,
+				const int num_compute_threads=0,
+				const int dma_threadIdx_start=0)
+      : CUDADMA_BASE (  dmaID,                            
+                        DMA_THREADS,                      
+                        num_compute_threads,              
+                        dma_threadIdx_start,              
+                        CUDADMASEQUENTIAL_DMA1_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA2_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA3_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA4_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA1_OFFS,      
+                        CUDADMASEQUENTIAL_DMA2_OFFS,      
+                        CUDADMASEQUENTIAL_DMA3_OFFS,      
+                        CUDADMASEQUENTIAL_DMA4_OFFS,      
+                        CUDADMASEQUENTIAL_DMA1_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA2_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA3_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA4_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA1_OFFS,      
+                        CUDADMASEQUENTIAL_DMA2_OFFS,     
+                        CUDADMASEQUENTIAL_DMA3_OFFS,      
+                        CUDADMASEQUENTIAL_DMA4_OFFS       
+                   )
+    {
+      SEQUENTIAL_INIT(BYTES_PER_ELMT,DMA_THREADS);
+    }
+public:
+  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  {
+    SEQUENTIAL_EXECUTE(false,BYTES_PER_ELMT,DMA_THREADS);
+  }
+public:
+  // Public DMA-thread Synchronization Functions:
+  __device__ __forceinline__ void wait_for_dma_start() const
+  {
+    CUDADMA_BASE::wait_for_dma_start();
+  }
+  __device__ __forceinline__ void finish_async_dma() const
+  {
+    CUDADMA_BASE::finish_async_dma();
+  }
+};
+
+template<int ALIGNMENT>
+class cudaDMASequential<true,ALIGNMENT,0,0> : public CUDADMA_BASE
 {
 private:
   const int num_dma_threads;
@@ -878,7 +929,7 @@ public:
 public:
   __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
   {
-    SEQUENTIAL_EXECUTE(bytes_per_elmt,num_dma_threads);
+    SEQUENTIAL_EXECUTE(true,bytes_per_elmt,num_dma_threads);
   }
 public:
   // Public DMA-thread Synchronization Functions:
@@ -892,8 +943,66 @@ public:
   }
 };
 
-template<bool DO_SYNC, int ALIGNMENT, int BYTES_PER_ELMT>
-class cudaDMASequential<DO_SYNC,ALIGNMENT,BYTES_PER_ELMT,0> : public CUDADMA_BASE
+template<int ALIGNMENT>
+class cudaDMASequential<false,ALIGNMENT,0,0> : public CUDADMA_BASE
+{
+private:
+  const int num_dma_threads;
+  const int bytes_per_elmt;
+  bool is_active_thread;
+  bool is_partial_thread;
+  int partial_thread_bytes;
+public:
+  __device__ cudaDMASequential (const int dmaID,
+                                const int DMA_THREADS,
+                                const int BYTES_PER_ELMT,
+                                const int num_compute_threads=0,
+                                const int dma_threadIdx_start=0)
+    : CUDADMA_BASE (    dmaID,                            
+                        DMA_THREADS,                  
+                        num_compute_threads,              
+                        dma_threadIdx_start,              
+                        CUDADMASEQUENTIAL_DMA1_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA2_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA3_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA4_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA1_OFFS,      
+                        CUDADMASEQUENTIAL_DMA2_OFFS,      
+                        CUDADMASEQUENTIAL_DMA3_OFFS,      
+                        CUDADMASEQUENTIAL_DMA4_OFFS,      
+                        CUDADMASEQUENTIAL_DMA1_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA2_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA3_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA4_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA1_OFFS,      
+                        CUDADMASEQUENTIAL_DMA2_OFFS,      
+                        CUDADMASEQUENTIAL_DMA3_OFFS,      
+                        CUDADMASEQUENTIAL_DMA4_OFFS      
+                   ),
+    num_dma_threads(DMA_THREADS),
+    bytes_per_elmt(BYTES_PER_ELMT)
+  {
+    SEQUENTIAL_INIT(BYTES_PER_ELMT,DMA_THREADS);
+  }
+public:
+  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  {
+    SEQUENTIAL_EXECUTE(false,bytes_per_elmt,num_dma_threads);
+  }
+public:
+  // Public DMA-thread Synchronization Functions:
+  __device__ __forceinline__ void wait_for_dma_start() const
+  {
+    CUDADMA_BASE::wait_for_dma_start();
+  }
+  __device__ __forceinline__ void finish_async_dma() const
+  {
+    CUDADMA_BASE::finish_async_dma();
+  }
+};
+
+template<int ALIGNMENT, int BYTES_PER_ELMT>
+class cudaDMASequential<true,ALIGNMENT,BYTES_PER_ELMT,0> : public CUDADMA_BASE
 {
 private:
   const int num_dma_threads;
@@ -933,7 +1042,7 @@ public:
 public:
   __device__ __forceinline__ void execute_dma( void * src_ptr, void * dst_ptr) const
   {
-    SEQUENTIAL_EXECUTE(BYTES_PER_ELMT,num_dma_threads);
+    SEQUENTIAL_EXECUTE(true,BYTES_PER_ELMT,num_dma_threads);
   }
 public:
   // Public DMA-thread Synchronization Functions:
@@ -946,6 +1055,62 @@ public:
     CUDADMA_BASE::finish_async_dma();
   }
 };
+
+template<int ALIGNMENT, int BYTES_PER_ELMT>
+class cudaDMASequential<false,ALIGNMENT,BYTES_PER_ELMT,0> : public CUDADMA_BASE
+{
+private:
+  const int num_dma_threads;
+  bool is_active_thread;
+  bool is_partial_thread;
+  int partial_thread_bytes;
+public:
+  __device__ cudaDMASequential (const int dmaID,
+                                const int DMA_THREADS,
+                                const int num_compute_threads=0,
+                                const int dma_threadIdx_start=0)
+    : CUDADMA_BASE (    dmaID,                            
+                        DMA_THREADS,                      
+                        num_compute_threads,              
+                        dma_threadIdx_start,              
+                        CUDADMASEQUENTIAL_DMA1_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA2_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA3_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA4_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA1_OFFS,      
+                        CUDADMASEQUENTIAL_DMA2_OFFS,      
+                        CUDADMASEQUENTIAL_DMA3_OFFS,      
+                        CUDADMASEQUENTIAL_DMA4_OFFS,      
+                        CUDADMASEQUENTIAL_DMA1_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA2_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA3_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA4_ITER_OFFS, 
+                        CUDADMASEQUENTIAL_DMA1_OFFS,      
+                        CUDADMASEQUENTIAL_DMA2_OFFS,     
+                        CUDADMASEQUENTIAL_DMA3_OFFS,      
+                        CUDADMASEQUENTIAL_DMA4_OFFS 
+        ),
+    num_dma_threads(DMA_THREADS)
+  {
+    SEQUENTIAL_INIT(BYTES_PER_ELMT,DMA_THREADS);
+  }
+public:
+  __device__ __forceinline__ void execute_dma( void * src_ptr, void * dst_ptr) const
+  {
+    SEQUENTIAL_EXECUTE(false,BYTES_PER_ELMT,num_dma_threads);
+  }
+public:
+  // Public DMA-thread Synchronization Functions:
+  __device__ __forceinline__ void wait_for_dma_start() const
+  {
+    CUDADMA_BASE::wait_for_dma_start();
+  }
+  __device__ __forceinline__ void finish_async_dma() const
+  {
+    CUDADMA_BASE::finish_async_dma();
+  }
+};
+
 
 #undef DMA_ITERS
 #undef DMA_ITER_INC

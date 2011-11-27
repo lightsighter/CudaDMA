@@ -59,7 +59,7 @@ dma_ld_test_four ( float *idata, float *odata, int src_stride/*bytes*/, int dst_
 {
 	extern __shared__ float buffer[];	
 
-	cudaDMAStrided<ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
+	cudaDMAStrided<true,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
 	  dma0 (1, num_compute_threads,
 		num_compute_threads,
 		src_stride,
@@ -111,7 +111,7 @@ dma_ld_test_three ( float *idata, float *odata, int src_stride/*bytes*/, int dst
 {
 	extern __shared__ float buffer[];	
 
-	cudaDMAStrided<ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
+	cudaDMAStrided<true,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
 	  dma0 (1, num_compute_threads,
 		num_compute_threads,
 		num_elmts,
@@ -164,7 +164,7 @@ dma_ld_test_two ( float *idata, float *odata, int src_stride/*bytes*/, int dst_s
 {
 	extern __shared__ float buffer[];	
 
-	cudaDMAStrided<ALIGNMENT,BYTES_PER_ELMT>
+	cudaDMAStrided<true,ALIGNMENT,BYTES_PER_ELMT>
 	  dma0 (1, dma_threads, num_compute_threads,
 		num_compute_threads,
 		num_elmts,
@@ -217,7 +217,7 @@ dma_ld_test_one ( float *idata, float *odata, int src_stride/*bytes*/, int dst_s
 {
 	extern __shared__ float buffer[];	
 
-	cudaDMAStrided<ALIGNMENT>
+	cudaDMAStrided<true,ALIGNMENT>
 	  dma0 (1, dma_threads, 
 		num_compute_threads,
 		num_compute_threads,

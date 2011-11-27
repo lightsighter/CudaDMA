@@ -63,7 +63,7 @@ dma_gather_four( float *idata, float *odata, int *offsets, int buffer_size, int 
 {
   extern __shared__ float buffer[];	
 
-  cudaDMAIndirect<true,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
+  cudaDMAIndirect<true,true,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
     dma0 (1, num_compute_threads,
           num_compute_threads,
           offsets);
@@ -114,7 +114,7 @@ dma_gather_three(float *idata, float *odata, int *offsets, int buffer_size, int 
 {
   extern __shared__ float buffer[];	
 
-  cudaDMAIndirect<true,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
+  cudaDMAIndirect<true,true,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
     dma0 (1, num_compute_threads,
           num_compute_threads,
           offsets,
@@ -166,7 +166,7 @@ dma_gather_two(float *idata, float *odata, int *offsets, int buffer_size, int nu
 {
   extern __shared__ float buffer[];	
 
-  cudaDMAIndirect<true,ALIGNMENT,BYTES_PER_ELMT>
+  cudaDMAIndirect<true,true,ALIGNMENT,BYTES_PER_ELMT>
     dma0 (1, num_dma_threads,
           num_compute_threads,
           num_compute_threads,
@@ -219,7 +219,7 @@ dma_gather_one(float *idata, float *odata, int *offsets, int buffer_size, int nu
 {
   extern __shared__ float buffer[];	
 
-  cudaDMAIndirect<true,ALIGNMENT>
+  cudaDMAIndirect<true,true,ALIGNMENT>
     dma0 (1, num_dma_threads,
           num_compute_threads,
           num_compute_threads,
@@ -273,7 +273,7 @@ dma_scatter_four( float *odata, int *offsets, int buffer_size, int num_compute_t
 {
   extern __shared__ float buffer[];
 
-  cudaDMAIndirect<false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
+  cudaDMAIndirect<false,true,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
     dma0 (1, num_compute_threads,
             num_compute_threads,
             offsets);
@@ -310,7 +310,7 @@ dma_scatter_three( float *odata, int *offsets, int buffer_size, int num_compute_
 {
   extern __shared__ float buffer[];
 
-  cudaDMAIndirect<false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
+  cudaDMAIndirect<false,true,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
     dma0 (1, num_compute_threads,
             num_compute_threads,
             offsets,
@@ -348,7 +348,7 @@ dma_scatter_two( float *odata, int *offsets, int buffer_size, int num_compute_th
 {
   extern __shared__ float buffer[];
 
-  cudaDMAIndirect<false,ALIGNMENT,BYTES_PER_ELMT>
+  cudaDMAIndirect<false,true,ALIGNMENT,BYTES_PER_ELMT>
     dma0 (1, num_dma_threads,
             num_compute_threads,
             num_compute_threads,
@@ -387,7 +387,7 @@ dma_scatter_one( float *odata, int *offsets, int buffer_size, int num_compute_th
 {
   extern __shared__ float buffer[];
 
-  cudaDMAIndirect<false,ALIGNMENT>
+  cudaDMAIndirect<false,true,ALIGNMENT>
     dma0 (1, num_dma_threads,
             num_compute_threads,
             num_compute_threads,

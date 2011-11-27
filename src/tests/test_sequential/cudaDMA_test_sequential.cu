@@ -56,7 +56,7 @@ dma_xfer_three( float *idata, float *odata, int buffer_size, int num_compute_thr
 {
   extern __shared__ float buffer[];
 
-  cudaDMASequential<ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
+  cudaDMASequential<true,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
     dma0 (1, num_compute_threads,
              num_compute_threads);
 
@@ -106,7 +106,7 @@ dma_xfer_two( float *idata, float *odata, int buffer_size, int num_compute_threa
 {
   extern __shared__ float buffer[];
 
-  cudaDMASequential<ALIGNMENT,BYTES_PER_ELMT>
+  cudaDMASequential<true,ALIGNMENT,BYTES_PER_ELMT>
     dma0 (1, num_dma_threads, num_compute_threads,
              num_compute_threads);
 
@@ -156,7 +156,7 @@ dma_xfer_one( float *idata, float *odata, int buffer_size, int num_compute_threa
 {
   extern __shared__ float buffer[];
 
-  cudaDMASequential<ALIGNMENT>
+  cudaDMASequential<true,ALIGNMENT>
     dma0 (1, num_dma_threads, num_compute_threads,
              num_compute_threads, bytes_per_elmt);
 

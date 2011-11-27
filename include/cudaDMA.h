@@ -842,7 +842,7 @@ private:
   bool is_partial_thread;  // If true, then only some of BYTES_PER_THREAD will be transferred for this thread
   int partial_thread_bytes;
 public:
-  __device__ cudaDMASequential (const int dmaID,
+  __device__ cudaDMASequential (const int dmaID=0,
 				const int num_compute_threads=0,
 				const int dma_threadIdx_start=0)
       : CUDADMA_BASE (  dmaID,                            
@@ -956,9 +956,9 @@ private:
   bool is_partial_thread;
   int partial_thread_bytes;
 public:
-  __device__ cudaDMASequential (const int dmaID,
-                                const int DMA_THREADS,
+  __device__ cudaDMASequential (const int DMA_THREADS,
                                 const int BYTES_PER_ELMT,
+                                const int dmaID=0,
                                 const int num_compute_threads=0,
                                 const int dma_threadIdx_start=0)
     : CUDADMA_BASE (    dmaID,                            
@@ -1070,8 +1070,8 @@ private:
   bool is_partial_thread;
   int partial_thread_bytes;
 public:
-  __device__ cudaDMASequential (const int dmaID,
-                                const int DMA_THREADS,
+  __device__ cudaDMASequential (const int DMA_THREADS,
+                                const int dmaID=0,
                                 const int num_compute_threads=0,
                                 const int dma_threadIdx_start=0)
     : CUDADMA_BASE (    dmaID,                            
@@ -2121,8 +2121,8 @@ class cudaDMAStrided<false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : pub
 {
 public:
   // Constructor for when dst_stride == BYTES_PER_ELMT
-  __device__ cudaDMAStrided (const int dmaID,
-                             const int el_stride,
+  __device__ cudaDMAStrided (const int el_stride,
+                             const int dmaID=0,
 			     const int num_compute_threads=0,
 			     const int dma_threadIdx_start=0)
 		: SINGLE_STRIDED_BASE
@@ -2130,9 +2130,9 @@ public:
 		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,NUM_ELMTS,THREADS_PER_ELMT,WARPS_PER_ELMT,COL_ITERS_FULL>(CUDADMA_WARP_TID);
 	}
   // Constructor for explicit destination stride
-  __device__ cudaDMAStrided (const int dmaID,
-                             const int src_stride,
+  __device__ cudaDMAStrided (const int src_stride,
                              const int dst_stride,
+                             const int dmaID=0,
 			     const int num_compute_threads=0,
 			     const int dma_threadIdx_start=0)
 		: DOUBLE_STRIDED_BASE
@@ -2279,11 +2279,11 @@ private:
 	const int DMA_COL_ITERS_FULL;
 	const int DMA_COL_ITERS_SPLIT;
 public:
-	__device__ cudaDMAStrided(const int dmaID,
-				const int DMA_THREADS,
+	__device__ cudaDMAStrided(const int DMA_THREADS,
                                 const int BYTES_PER_ELMT,
 				const int NUM_ELMTS,
 				const int el_stride,
+                                const int dmaID=0,
                                 const int num_compute_threads=0,
 				const int dma_threadIdx_start=0)
 		: SINGLE_STRIDED_BASE,
@@ -2296,12 +2296,12 @@ public:
 		initialize_strided<ALIGNMENT>(LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,NUM_ELMTS,THREADS_PER_ELMT,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
 	}
 
-	__device__ cudaDMAStrided(const int dmaID,
-				const int DMA_THREADS,
+	__device__ cudaDMAStrided(const int DMA_THREADS,
                                 const int BYTES_PER_ELMT,
 				const int NUM_ELMTS,
 				const int src_stride,
 				const int dst_stride,
+                                const int dmaID=0,
                                 const int num_compute_threads=0,
 				const int dma_threadIdx_start=0)
 		: DOUBLE_STRIDED_BASE,
@@ -2442,10 +2442,10 @@ private:
 	const int DMA_ROW_ITERS_SPLIT;
 	const int DMA_COL_ITERS_FULL;
 public:
-	__device__ cudaDMAStrided(const int dmaID,
-				const int DMA_THREADS,
+	__device__ cudaDMAStrided(const int DMA_THREADS,
                                 const int NUM_ELMTS,
 				const int el_stride,
+                                const int dmaID=0,
                                 const int num_compute_threads=0,
 				const int dma_threadIdx_start=0)
 		: SINGLE_STRIDED_BASE,
@@ -2456,11 +2456,11 @@ public:
 		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
 	}
 
-	__device__ cudaDMAStrided(const int dmaID,
-				const int DMA_THREADS,
+	__device__ cudaDMAStrided(const int DMA_THREADS,
                                 const int NUM_ELMTS,
 				const int src_stride,
 				const int dst_stride,
+                                const int dmaID=0,
                                 const int num_compute_threads=0,
 				const int dma_threadIdx_start=0)
 		: DOUBLE_STRIDED_BASE,
@@ -2596,9 +2596,9 @@ private:
 	const int DMA_ROW_ITERS_SPLIT;
 	const int DMA_COL_ITERS_FULL;
 public:
-	__device__ cudaDMAStrided(const int dmaID,
-                                const int NUM_ELMTS,
+	__device__ cudaDMAStrided(const int NUM_ELMTS,
 				const int el_stride,
+                                const int dmaID=0,
                                 const int num_compute_threads=0,
 				const int dma_threadIdx_start=0)
 		: SINGLE_STRIDED_BASE,
@@ -2609,10 +2609,10 @@ public:
 		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
 	}
 
-	__device__ cudaDMAStrided(const int dmaID,
-                                const int NUM_ELMTS,
+	__device__ cudaDMAStrided(const int NUM_ELMTS,
 				const int src_stride,
 				const int dst_stride,
+                                const int dmaID=0,
                                 const int num_compute_threads=0,
 				const int dma_threadIdx_start=0)
 		: DOUBLE_STRIDED_BASE,
@@ -3048,8 +3048,8 @@ protected:
 template<bool GATHER, int ALIGNMENT, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
 class cudaDMAIndirect<GATHER,false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : public cudaDMAIndirectBase<GATHER> {
 public:
-    __device__ cudaDMAIndirect(const int dmaID,
-                               const int* offs,
+    __device__ cudaDMAIndirect(const int* offs,
+                               const int dmaID=0,
                                const int num_compute_threads=0,
                                const int dma_threadIdx_start=0)
       : INDIRECT_BASE
@@ -3192,11 +3192,11 @@ private:
     const int DMA_COL_ITERS_FULL;
     const int DMA_COL_ITERS_SPLIT;
 public:
-    __device__ cudaDMAIndirect(const int dmaID,
-                              const int DMA_THREADS,
+    __device__ cudaDMAIndirect(const int DMA_THREADS,
                               const int *offs,
                               const int BYTES_PER_ELMT,
                               const int NUM_ELMTS,
+                              const int dmaID=0,
                               const int num_compute_threads=0,
                               const int dma_threadIdx_start=0)
       : INDIRECT_BASE,
@@ -3334,10 +3334,10 @@ private:
     const int DMA_ROW_ITERS_SPLIT;
     const int DMA_COL_ITERS_FULL;
 public:
-    __device__ cudaDMAIndirect(const int dmaID,
-                              const int DMA_THREADS,
+    __device__ cudaDMAIndirect(const int DMA_THREADS,
                               const int *offs,
                               const int NUM_ELMTS,
+                              const int dmaID=0,
                               const int num_compute_threads=0,
                               const int dma_threadIdx_start=0)
       : INDIRECT_BASE,
@@ -3470,9 +3470,9 @@ private:
     const int DMA_ROW_ITERS_SPLIT;
     const int DMA_COL_ITERS_FULL;
 public:
-    __device__ cudaDMAIndirect(const int dmaID,
-                              const int *offs,
+    __device__ cudaDMAIndirect(const int *offs,
                               const int NUM_ELMTS,
+                              const int dmaID=0,
                               const int num_compute_threads=0,
                               const int dma_threadIdx_start=0)
       : INDIRECT_BASE,

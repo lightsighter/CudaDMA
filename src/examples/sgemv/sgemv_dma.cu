@@ -144,7 +144,7 @@ sgemvn_cuda_dma_vec_single(int n, int m, int n1, float alpha, float *A, int lda,
 {
 	__shared__ float buff[VEC_ELMTS];
 
-	cudaDMASequential<16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
+	cudaDMASequential<true,16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
 	  dma_ld_0(1,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA);
 
 	if (threadIdx.x < COMPUTE_THREADS_PER_CTA)
@@ -204,9 +204,9 @@ sgemvn_cuda_dma_vec_double(int n, int m, int n1, float alpha, float *A, int lda,
 	__shared__ float buff0[VEC_ELMTS];
 	__shared__ float buff1[VEC_ELMTS];
 
-	cudaDMASequential<16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
+	cudaDMASequential<true,16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
 	  dma_ld_0(1,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA);
-	cudaDMASequential<16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
+	cudaDMASequential<true,16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
 	  dma_ld_1(2,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA+1*DMA_THREADS_PER_LD);
 
 	if (threadIdx.x < COMPUTE_THREADS_PER_CTA)
@@ -273,9 +273,9 @@ sgemvn_cuda_dma_vec_manual(int n, int m, int n1, float alpha, float *A, int lda,
 	__shared__ float buff1[VEC_ELMTS];
 
 
-	cudaDMASequential<16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
+	cudaDMASequential<true,16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
 	  dma_ld_0(1,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA);
-	cudaDMASequential<16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
+	cudaDMASequential<true,16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
 	  dma_ld_1(2,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA);
 
 	if (threadIdx.x < COMPUTE_THREADS_PER_CTA)
@@ -334,10 +334,10 @@ sgemvn_cuda_dma_both_single(int n, int m, int n1, float alpha, float *A, int lda
 	__shared__ float buff[VEC_ELMTS];
 	__shared__ float mat[VEC_ELMTS][COMPUTE_THREADS_PER_CTA];	
 
-	cudaDMASequential<16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
+	cudaDMASequential<true,16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
 	  dma_ld_0(1,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA);
 
-	cudaDMAStrided<16,4*COMPUTE_THREADS_PER_CTA,4*DMA_THREADS_PER_LD,VEC_ELMTS>
+	cudaDMAStrided<true,16,4*COMPUTE_THREADS_PER_CTA,4*DMA_THREADS_PER_LD,VEC_ELMTS>
 	  dma_ld_1(2,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA+1*DMA_THREADS_PER_LD,4*lda);
 
 	if (threadIdx.x < COMPUTE_THREADS_PER_CTA)
@@ -396,16 +396,16 @@ sgemvn_cuda_dma_both_double(int n, int m, int n1, float alpha, float *A, int lda
 	__shared__ float mat0[VEC_ELMTS][COMPUTE_THREADS_PER_CTA];	
 	__shared__ float mat1[VEC_ELMTS][COMPUTE_THREADS_PER_CTA];
 
-	cudaDMASequential<16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
+	cudaDMASequential<true,16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
 	  dma_ld_0(1,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA);
 
-	cudaDMASequential<16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
+	cudaDMASequential<true,16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
 	  dma_ld_1(2,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA+1*DMA_THREADS_PER_LD);
 
-	cudaDMAStrided<16,4*COMPUTE_THREADS_PER_CTA,4*DMA_THREADS_PER_LD,VEC_ELMTS>
+	cudaDMAStrided<true,16,4*COMPUTE_THREADS_PER_CTA,4*DMA_THREADS_PER_LD,VEC_ELMTS>
 	  dma_ld_2(3,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA+2*DMA_THREADS_PER_LD,4*lda);
 
-	cudaDMAStrided<16,4*COMPUTE_THREADS_PER_CTA,4*DMA_THREADS_PER_LD,VEC_ELMTS>
+	cudaDMAStrided<true,16,4*COMPUTE_THREADS_PER_CTA,4*DMA_THREADS_PER_LD,VEC_ELMTS>
 	  dma_ld_3(4,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA+6*DMA_THREADS_PER_LD,4*lda);
 
 	if (threadIdx.x < COMPUTE_THREADS_PER_CTA)
@@ -497,16 +497,16 @@ sgemvn_cuda_dma_both_manual(int n, int m, int n1, float alpha, float *A, int lda
 	__shared__ float mat0[VEC_ELMTS][COMPUTE_THREADS_PER_CTA];	
 	__shared__ float mat1[VEC_ELMTS][COMPUTE_THREADS_PER_CTA];
 
-	cudaDMASequential<16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
+	cudaDMASequential<true,16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
 	  dma_ld_0(1,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA);
 
-	cudaDMASequential<16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
+	cudaDMASequential<true,16,4*VEC_ELMTS,DMA_THREADS_PER_LD>
 	  dma_ld_1(2,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA);
 
-	cudaDMAStrided<16,4*COMPUTE_THREADS_PER_CTA,8*DMA_THREADS_PER_LD,VEC_ELMTS>
+	cudaDMAStrided<true,16,4*COMPUTE_THREADS_PER_CTA,8*DMA_THREADS_PER_LD,VEC_ELMTS>
 	  dma_ld_2(3,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA+1*DMA_THREADS_PER_LD,4*lda);
 
-	cudaDMAStrided<16,4*COMPUTE_THREADS_PER_CTA,8*DMA_THREADS_PER_LD,VEC_ELMTS>
+	cudaDMAStrided<true,16,4*COMPUTE_THREADS_PER_CTA,8*DMA_THREADS_PER_LD,VEC_ELMTS>
 	  dma_ld_3(4,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA+1*DMA_THREADS_PER_LD,4*lda);
 
 	if (threadIdx.x < COMPUTE_THREADS_PER_CTA)
@@ -580,7 +580,7 @@ sgemvn_cuda_dma_mat_single(int n, int m, int n1, float alpha, float *A, int lda,
 {
 	__shared__ float mat[VEC_ELMTS][COMPUTE_THREADS_PER_CTA];	
 
-	cudaDMAStrided<16,4*COMPUTE_THREADS_PER_CTA,8*DMA_THREADS_PER_LD,VEC_ELMTS>
+	cudaDMAStrided<true,16,4*COMPUTE_THREADS_PER_CTA,8*DMA_THREADS_PER_LD,VEC_ELMTS>
 	  dma_ld_0(0,COMPUTE_THREADS_PER_CTA,COMPUTE_THREADS_PER_CTA,4*lda);
 
 	if (threadIdx.x < COMPUTE_THREADS_PER_CTA)

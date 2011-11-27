@@ -5,7 +5,7 @@ all: vec_single
 #PROFILING=1
 #SASS=1
 
-CU_FLAGS= -O2 -arch=compute_20 -code=sm_20 --ptxas-options="-v" -keep # -abi=no" 
+CU_FLAGS= -O2 -arch=compute_20 -code=sm_20 --ptxas-options="-v" #-keep # -abi=no" 
 
 ifdef DEBUG
 CU_FLAGS+= -g -DDEBUG

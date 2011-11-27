@@ -629,7 +629,7 @@ class cudaDMA {
       CUDADMA_BASE::finish_async_dma();
 
 
-template<int ALIGNMENT=4, int BYTES_PER_ELMT=0, int DMA_THREADS=0>
+template<bool DO_SYNC=true, int ALIGNMENT=4, int BYTES_PER_ELMT=0, int DMA_THREADS=0>
 class cudaDMASequential : public CUDADMA_BASE {
 private:
   bool is_active_thread;   // If true, then all of BYTES_PER_THREAD will be transferred for this thread
@@ -724,18 +724,8 @@ public:
 #endif // SEQUENTIAL_INIT
     }
 public:
-  __device__ __forceinline__ void execute_dma ( void * src_ptr, void * dst_ptr) const
-  {
-    execute_internal<true>(src_ptr, dst_ptr);
-  }
-  __device__ __forceinline__ void execute_dma_no_sync ( void * src_ptr, void * dst_ptr) const
-  {
-    execute_internal<false>(src_ptr, dst_ptr);
-  }
-protected:
   // DMA-thread Data Transfer Functions:
-  template<bool DO_SYNC>
-    __device__ __forceinline__ void execute_internal ( void * src_ptr, void * dst_ptr ) const
+    __device__ __forceinline__ void execute_dma ( void * src_ptr, void * dst_ptr ) const
   {
 
 #ifdef CUDADMA_DEBUG_ON
@@ -844,8 +834,8 @@ public:
   }
 };
 
-template<int ALIGNMENT>
-class cudaDMASequential<ALIGNMENT,0,0> : public CUDADMA_BASE
+template<bool DO_SYNC, int ALIGNMENT>
+class cudaDMASequential<DO_SYNC,ALIGNMENT,0,0> : public CUDADMA_BASE
 {
 private:
   const int num_dma_threads;
@@ -888,16 +878,6 @@ public:
 public:
   __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
   {
-    execute_internal<true>(src_ptr, dst_ptr);   
-  }
-  __device__ __forceinline__ void execute_dma_no_sync(void * src_ptr, void * dst_ptr) const
-  {
-    execute_internal<false>(src_ptr, dst_ptr);
-  }
-protected:
-  template<bool DO_SYNC>
-  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
-  {
     SEQUENTIAL_EXECUTE(bytes_per_elmt,num_dma_threads);
   }
 public:
@@ -912,8 +892,8 @@ public:
   }
 };
 
-template<int ALIGNMENT, int BYTES_PER_ELMT>
-class cudaDMASequential<ALIGNMENT,BYTES_PER_ELMT,0> : public CUDADMA_BASE
+template<bool DO_SYNC, int ALIGNMENT, int BYTES_PER_ELMT>
+class cudaDMASequential<DO_SYNC,ALIGNMENT,BYTES_PER_ELMT,0> : public CUDADMA_BASE
 {
 private:
   const int num_dma_threads;
@@ -951,17 +931,7 @@ public:
     SEQUENTIAL_INIT(BYTES_PER_ELMT,DMA_THREADS);
   }
 public:
-  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const 
-  {
-    execute_internal<true>(src_ptr, dst_ptr);
-  }
-  __device__ __forceinline__ void execute_dma_no_sync(void * src_ptr, void * dst_ptr) const
-  {
-    execute_internal<false>(src_ptr, dst_ptr);
-  }
-protected:
-  template<bool DO_SYNC>
-  __device__ __forceinline__ void execute_internal( void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma( void * src_ptr, void * dst_ptr) const
   {
     SEQUENTIAL_EXECUTE(BYTES_PER_ELMT,num_dma_threads);
   }
@@ -1790,7 +1760,7 @@ public:
 	if (DO_SYNC) CUDADMA_BASE::finish_async_dma();
 
 
-template<int ALIGNMENT = 4, int BYTES_PER_ELMT = 0, int DMA_THREADS = 0, int NUM_ELMTS = 0>
+template<bool DO_SYNC=true, int ALIGNMENT = 4, int BYTES_PER_ELMT = 0, int DMA_THREADS = 0, int NUM_ELMTS = 0>
 class cudaDMAStrided : public cudaDMAStridedBase 
 {
 public:
@@ -1821,17 +1791,17 @@ public:
 	{
 	  case 4:
 	    {
-		execute_internal<true,float,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+		execute_internal<float,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
 		break;
 	    }
 	  case 8:
 	    {
-		execute_internal<true,float2,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+		execute_internal<float2,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
 		break;
 	    }
 	  case 16:
 	    {
-		execute_internal<true,float4,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+		execute_internal<float4,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
 		break;
 	    }
 #ifdef CUDADMA_DEBUG_ON
@@ -1841,34 +1811,8 @@ public:
 #endif
 	}
   }
-  __device__ __forceinline__ void execute_dma_no_sync(void * src_ptr, void * dst_ptr)
-  {
-        switch (ALIGNMENT)
-        {
-          case 4:
-	    {
-		execute_internal<false,float,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
-		break;
-	    }
-	  case 8:
-	    {
-		execute_internal<false,float2,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
-		break;
-	    }
-	  case 16:
-	    {
-		execute_internal<false,float4,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
-		break;
-	    }
-#ifdef CUDADMA_DEBUG_ON
-	  default:
-		printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
-		break;
-#endif
-        }
-  }
 private:
-  template<bool DO_SYNC, typename BULK_TYPE, int ELMT_LDS, int DMA_ROW_ITERS_FULL, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_FULL, int DMA_COL_ITERS_SPLIT>
+  template<typename BULK_TYPE, int ELMT_LDS, int DMA_ROW_ITERS_FULL, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_FULL, int DMA_COL_ITERS_SPLIT>
   __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
   {
 #ifdef STRIDED_EXECUTE
@@ -2002,8 +1946,8 @@ private:
 };
 
 // One template parameter for alignment only
-template<int ALIGNMENT>
-class cudaDMAStrided<ALIGNMENT,0,0,0> : public cudaDMAStridedBase 
+template<bool DO_SYNC, int ALIGNMENT>
+class cudaDMAStrided<DO_SYNC,ALIGNMENT,0,0,0> : public cudaDMAStridedBase 
 {
 private:
 	const int ELMT_LDS;
@@ -2053,17 +1997,17 @@ public:
 		{
 		  case 4:
 		    {
-			execute_internal<true,float>(src_ptr, dst_ptr);
+			execute_internal<float>(src_ptr, dst_ptr);
 			break;
 		    }
 		  case 8:
 		    {
-			execute_internal<true,float2>(src_ptr, dst_ptr);
+			execute_internal<float2>(src_ptr, dst_ptr);
 			break;
 		    }
 		  case 16:
 		    {
-			execute_internal<true,float4>(src_ptr, dst_ptr);
+			execute_internal<float4>(src_ptr, dst_ptr);
 			break;
 		    }
 #ifdef CUDADMA_DEBUG_ON
@@ -2074,34 +2018,8 @@ public:
 		}
 	}
 
-        __device__ __forceinline__ void execute_dma_no_sync(void * src_ptr, void * dst_ptr) const
-	{
-		switch (ALIGNMENT)
-		{
-		  case 4:
-		    {
-			execute_internal<false,float>(src_ptr, dst_ptr);
-			break;
-		    }
-		  case 8:
-		    {
-			execute_internal<false,float2>(src_ptr, dst_ptr);
-			break;
-		    }
-		  case 16:
-		    {
-			execute_internal<false,float4>(src_ptr, dst_ptr);
-			break;
-		    }
-#ifdef CUDADMA_DEBUG_ON
-		  default:
-			printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
-			break;
-#endif
-		}
-	}
 private:
-	template<bool DO_SYNC, typename BULK_TYPE>
+	template<typename BULK_TYPE>
 	__device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
 	{
 		#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes, DMA_COL_ITERS_SPLIT)
@@ -2115,8 +2033,8 @@ private:
 };
 
 // Two template parameters for alignment and element size
-template<int ALIGNMENT, int BYTES_PER_ELMT>
-class cudaDMAStrided<ALIGNMENT,BYTES_PER_ELMT,0,0> : public cudaDMAStridedBase 
+template<bool DO_SYNC, int ALIGNMENT, int BYTES_PER_ELMT>
+class cudaDMAStrided<DO_SYNC,ALIGNMENT,BYTES_PER_ELMT,0,0> : public cudaDMAStridedBase 
 {
 private:
 	const int DMA_ROW_ITERS_FULL;
@@ -2158,17 +2076,17 @@ public:
 		{
 		  case 4:
 		    {
-			execute_internal<true,float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+			execute_internal<float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
 			break;
 		    }
 		  case 8:
 		    {
-			execute_internal<true,float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+			execute_internal<float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
 			break;
 		    }
 		  case 16:
 		    {
-			execute_internal<true,float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+			execute_internal<float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
 			break;
 		    }
 #ifdef CUDADMA_DEBUG_ON
@@ -2178,36 +2096,8 @@ public:
 #endif
 		}
 	}
-
-        __device__ __forceinline__ void execute_dma_no_sync(void * src_ptr, void * dst_ptr) const
-	{
-		switch (ALIGNMENT)
-		{
-		  case 4:
-		    {
-			execute_internal<false,float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
-			break;
-		    }
-		  case 8:
-		    {
-			execute_internal<false,float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
-			break;
-		    }
-		  case 16:
-		    {
-			execute_internal<false,float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
-			break;
-		    }
-#ifdef CUDADMA_DEBUG_ON
-		  default:
-			printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
-			break;
-#endif
-		}
-	}
-
 private:
-	template<bool DO_SYNC, typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
+	template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
 	__device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
 	{
 		#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes)
@@ -2221,8 +2111,8 @@ private:
 };
 
 // Three template parameters for alignment, element size, and dma threads
-template<int ALIGNMENT, int BYTES_PER_ELMT, int DMA_THREADS>
-class cudaDMAStrided<ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,0> : public cudaDMAStridedBase 
+template<bool DO_SYNC, int ALIGNMENT, int BYTES_PER_ELMT, int DMA_THREADS>
+class cudaDMAStrided<DO_SYNC,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,0> : public cudaDMAStridedBase 
 {
 private:
 	const int DMA_ROW_ITERS_FULL;
@@ -2262,44 +2152,17 @@ public:
 		{
 		  case 4:
 		    {
-			execute_internal<true,float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+			execute_internal<float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
 			break;
 		    }
 		  case 8:
 		    {
-			execute_internal<true,float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+			execute_internal<float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
 			break;
 		    }
 		  case 16:
 		    {
-			execute_internal<true,float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
-			break;
-		    }
-#ifdef CUDADMA_DEBUG_ON
-		  default:
-			printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
-			break;
-#endif
-		}
-	}
-
-        __device__ __forceinline__ void execute_dma_no_sync(void * src_ptr, void * dst_ptr) const
-	{
-		switch (ALIGNMENT)
-		{
-		  case 4:
-		    {
-			execute_internal<false,float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
-			break;
-		    }
-		  case 8:
-		    {
-			execute_internal<false,float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
-			break;
-		    }
-		  case 16:
-		    {
-			execute_internal<false,float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+			execute_internal<float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
 			break;
 		    }
 #ifdef CUDADMA_DEBUG_ON
@@ -2310,7 +2173,7 @@ public:
 		}
 	}
 private:
-	template<bool DO_SYNC, typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
+	template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
 	__device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
 	{
 		#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes)
@@ -2505,7 +2368,7 @@ private:
 	if (DO_SYNC) CUDADMA_BASE::finish_async_dma();
 
 
-template<bool GATHER=true, int ALIGNMENT=4, int BYTES_PER_ELMT=0, int DMA_THREADS=0, int NUM_ELMTS=0>
+template<bool GATHER=true, bool DO_SYNC=true, int ALIGNMENT=4, int BYTES_PER_ELMT=0, int DMA_THREADS=0, int NUM_ELMTS=0>
 class cudaDMAIndirect : public cudaDMAIndirectBase<GATHER> {
 public:
     __device__ cudaDMAIndirect(const int dmaID,
@@ -2526,43 +2389,17 @@ public:
 	{
 	  case 4:
 	    {
-		execute_internal<true,float,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+		execute_internal<float,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
 		break;
 	    }
 	  case 8:
 	    {
-		execute_internal<true,float2,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+		execute_internal<float2,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
 		break;
 	    }
 	  case 16:
 	    {
-		execute_internal<true,float4,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
-		break;
-	    }
-#ifdef CUDADMA_DEBUG_ON
-	  default:
-		printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
-		break;
-#endif
-        }
-  }
-  __device__ __forceinline__ void execute_dma_no_sync(void * src_ptr, void * dst_ptr) const
-  {
-    switch (ALIGNMENT)
-	{
-	  case 4:
-	    {
-		execute_internal<false,float,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
-		break;
-	    }
-	  case 8:
-	    {
-		execute_internal<false,float2,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
-		break;
-	    }
-	  case 16:
-	    {
-		execute_internal<false,float4,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+		execute_internal<float4,LDS_PER_ELMT_PER_THREAD,ROW_ITERS_FULL,ROW_ITERS_SPLIT,COL_ITERS_FULL,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
 		break;
 	    }
 #ifdef CUDADMA_DEBUG_ON
@@ -2573,7 +2410,7 @@ public:
         }
   }
 protected:
-  template<bool DO_SYNC, typename BULK_TYPE, int ELMT_LDS, int DMA_ROW_ITERS_FULL, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_FULL, int DMA_COL_ITERS_SPLIT>
+  template<typename BULK_TYPE, int ELMT_LDS, int DMA_ROW_ITERS_FULL, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_FULL, int DMA_COL_ITERS_SPLIT>
   __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
   {
 #ifdef INDIRECT_EXECUTE 
@@ -2730,8 +2567,8 @@ protected:
   }
 };
 
-template<bool GATHER, int ALIGNMENT>
-class cudaDMAIndirect<GATHER,ALIGNMENT,0,0,0> : public cudaDMAIndirectBase<GATHER> {
+template<bool GATHER, bool DO_SYNC, int ALIGNMENT>
+class cudaDMAIndirect<GATHER,DO_SYNC,ALIGNMENT,0,0,0> : public cudaDMAIndirectBase<GATHER> {
 private:
     const int ELMT_LDS;
     const int DMA_ROW_ITERS_FULL;
@@ -2765,44 +2602,17 @@ public:
     {
       case 4:
         {
-          execute_internal<true,float>(src_ptr,dst_ptr);
+          execute_internal<float>(src_ptr,dst_ptr);
           break;
         }
       case 8:
         {
-          execute_internal<true,float2>(src_ptr,dst_ptr);
+          execute_internal<float2>(src_ptr,dst_ptr);
           break;
         }
       case 16:
         {
-          execute_internal<true,float4>(src_ptr,dst_ptr);
-          break;
-        }
-#ifdef CUDADMA_DEBUG_ON
-      default:
-        printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
-        break;
-#endif
-    }
-  }
-
-  __device__ __forceinline__ void execute_dma_no_sync(void * src_ptr, void * dst_ptr) const
-  {
-    switch (ALIGNMENT)
-    {
-      case 4:
-        {
-          execute_internal<false,float>(src_ptr,dst_ptr);
-          break;
-        }
-      case 8:
-        {
-          execute_internal<false,float2>(src_ptr,dst_ptr);
-          break;
-        }
-      case 16:
-        {
-          execute_internal<false,float4>(src_ptr,dst_ptr);
+          execute_internal<float4>(src_ptr,dst_ptr);
           break;
         }
 #ifdef CUDADMA_DEBUG_ON
@@ -2813,7 +2623,7 @@ public:
     }
   }
 protected:
-  template<bool DO_SYNC, typename BULK_TYPE>
+  template<typename BULK_TYPE>
   __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
   {
     #define COPY_ACROSS_ELMTS1 cudaDMAIndirectBase<GATHER>::template \
@@ -2832,8 +2642,8 @@ protected:
   }
 };
 
-template<bool GATHER, int ALIGNMENT, int BYTES_PER_ELMT>
-class cudaDMAIndirect<GATHER,ALIGNMENT,BYTES_PER_ELMT,0,0> : public cudaDMAIndirectBase<GATHER> {
+template<bool GATHER, bool DO_SYNC, int ALIGNMENT, int BYTES_PER_ELMT>
+class cudaDMAIndirect<GATHER,DO_SYNC,ALIGNMENT,BYTES_PER_ELMT,0,0> : public cudaDMAIndirectBase<GATHER> {
 private:
     const int DMA_ROW_ITERS_FULL;
     const int DMA_ROW_ITERS_SPLIT;
@@ -2859,44 +2669,17 @@ public:
     {
       case 4:
         {
-            execute_internal<true,float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+            execute_internal<float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
             break;
         }
       case 8:
         {
-            execute_internal<true,float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+            execute_internal<float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
             break;
         }
       case 16:
         {
-            execute_internal<true,float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
-            break;
-        }
-#ifdef CUDADMA_DEBUG_ON
-      default:
-            printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
-            break;
-#endif
-    }
-  }
-
-  __device__ __forceinline__ void execute_dma_no_sync(void * src_ptr, void * dst_ptr) const
-  {
-    switch (ALIGNMENT)
-    {
-      case 4:
-        {
-            execute_internal<false,float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
-            break;
-        }
-      case 8:
-        {
-            execute_internal<false,float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
-            break;
-        }
-      case 16:
-        {
-            execute_internal<false,float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
+            execute_internal<float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr, dst_ptr);
             break;
         }
 #ifdef CUDADMA_DEBUG_ON
@@ -2907,7 +2690,7 @@ public:
     }
   }
 protected:
-  template<bool DO_SYNC, typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
+  template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
   __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
   {
     #define COPY_ACROSS_ELMTS1 cudaDMAIndirectBase<GATHER>::template \
@@ -2926,8 +2709,8 @@ protected:
   }
 };
 
-template<bool GATHER, int ALIGNMENT, int BYTES_PER_ELMT, int DMA_THREADS>
-class cudaDMAIndirect<GATHER,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,0> : public cudaDMAIndirectBase<GATHER> {
+template<bool GATHER, bool DO_SYNC, int ALIGNMENT, int BYTES_PER_ELMT, int DMA_THREADS>
+class cudaDMAIndirect<GATHER,DO_SYNC,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,0> : public cudaDMAIndirectBase<GATHER> {
 private:
     const int DMA_ROW_ITERS_FULL;
     const int DMA_ROW_ITERS_SPLIT;
@@ -2952,44 +2735,17 @@ public:
     {
       case 4:
         {
-          execute_internal<true,float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr,dst_ptr);
+          execute_internal<float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr,dst_ptr);
           break;
         }
       case 8:
         {
-          execute_internal<true,float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr,dst_ptr);
+          execute_internal<float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr,dst_ptr);
           break;
         }
       case 16:
         {
-          execute_internal<true,float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr,dst_ptr);
-          break;
-        }
-#ifdef CUDADMA_DEBUG_ON
-      default:
-          printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
-          break;
-#endif
-    }
-  }
-
-  __device__ __forceinline__ void execute_dma_do_sync(void * src_ptr, void * dst_ptr) const
-  {
-    switch (ALIGNMENT)
-    {
-      case 4:
-        {
-          execute_internal<false,float,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr,dst_ptr);
-          break;
-        }
-      case 8:
-        {
-          execute_internal<false,float2,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr,dst_ptr);
-          break;
-        }
-      case 16:
-        {
-          execute_internal<false,float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr,dst_ptr);
+          execute_internal<float4,LDS_PER_ELMT_PER_THREAD,COL_ITERS_SPLIT>(src_ptr,dst_ptr);
           break;
         }
 #ifdef CUDADMA_DEBUG_ON
@@ -3001,7 +2757,7 @@ public:
   }
 
 protected:
-  template<bool DO_SYNC, typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
+  template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
   __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
   {
     #define COPY_ACROSS_ELMTS1 cudaDMAIndirectBase<GATHER>::template \

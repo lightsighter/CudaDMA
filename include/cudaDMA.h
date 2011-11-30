@@ -626,7 +626,8 @@ class cudaDMA {
                          (this_thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) : \
                          (this_thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0)); \
       }                                                                     \
-      CUDADMA_BASE::finish_async_dma();
+      if (DO_SYNC)                                                          \
+        CUDADMA_BASE::finish_async_dma();
 
 
 template<bool DO_SYNC, int ALIGNMENT, int BYTES_PER_ELMT=0, int DMA_THREADS=0>

@@ -956,8 +956,8 @@ private:
   bool is_partial_thread;
   int partial_thread_bytes;
 public:
-  __device__ cudaDMASequential (const int DMA_THREADS,
-                                const int BYTES_PER_ELMT,
+#define DMA_THREADS  blockDim.x
+  __device__ cudaDMASequential (const int BYTES_PER_ELMT,
                                 const int dmaID=0,
                                 const int num_compute_threads=0,
                                 const int dma_threadIdx_start=0)
@@ -987,6 +987,7 @@ public:
   {
     SEQUENTIAL_INIT(BYTES_PER_ELMT,DMA_THREADS);
   }
+#undef DMA_THREADS
 public:
   __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
   {
@@ -1070,8 +1071,8 @@ private:
   bool is_partial_thread;
   int partial_thread_bytes;
 public:
-  __device__ cudaDMASequential (const int DMA_THREADS,
-                                const int dmaID=0,
+#define DMA_THREADS  blockDim.x
+  __device__ cudaDMASequential (const int dmaID=0,
                                 const int num_compute_threads=0,
                                 const int dma_threadIdx_start=0)
     : CUDADMA_BASE (    dmaID,                            
@@ -1099,6 +1100,7 @@ public:
   {
     SEQUENTIAL_INIT(BYTES_PER_ELMT,DMA_THREADS);
   }
+#undef DMA_THREADS
 public:
   __device__ __forceinline__ void execute_dma( void * src_ptr, void * dst_ptr) const
   {
@@ -2279,8 +2281,8 @@ private:
 	const int DMA_COL_ITERS_FULL;
 	const int DMA_COL_ITERS_SPLIT;
 public:
-	__device__ cudaDMAStrided(const int DMA_THREADS,
-                                const int BYTES_PER_ELMT,
+#define DMA_THREADS blockDim.x
+	__device__ cudaDMAStrided(const int BYTES_PER_ELMT,
 				const int NUM_ELMTS,
 				const int el_stride,
                                 const int dmaID=0,
@@ -2296,8 +2298,7 @@ public:
 		initialize_strided<ALIGNMENT>(LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,NUM_ELMTS,THREADS_PER_ELMT,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
 	}
 
-	__device__ cudaDMAStrided(const int DMA_THREADS,
-                                const int BYTES_PER_ELMT,
+	__device__ cudaDMAStrided(const int BYTES_PER_ELMT,
 				const int NUM_ELMTS,
 				const int src_stride,
 				const int dst_stride,
@@ -2313,6 +2314,7 @@ public:
 	{
 		initialize_strided<ALIGNMENT>(LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,NUM_ELMTS,THREADS_PER_ELMT,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
 	}
+#undef DMA_THREADS
 public:
 	__device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
 	{
@@ -2442,8 +2444,8 @@ private:
 	const int DMA_ROW_ITERS_SPLIT;
 	const int DMA_COL_ITERS_FULL;
 public:
-	__device__ cudaDMAStrided(const int DMA_THREADS,
-                                const int NUM_ELMTS,
+#define DMA_THREADS  blockDim.x
+	__device__ cudaDMAStrided(const int NUM_ELMTS,
 				const int el_stride,
                                 const int dmaID=0,
                                 const int num_compute_threads=0,
@@ -2456,8 +2458,7 @@ public:
 		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
 	}
 
-	__device__ cudaDMAStrided(const int DMA_THREADS,
-                                const int NUM_ELMTS,
+	__device__ cudaDMAStrided(const int NUM_ELMTS,
 				const int src_stride,
 				const int dst_stride,
                                 const int dmaID=0,
@@ -2470,6 +2471,7 @@ public:
 	{
 		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
 	}
+#undef DMA_THREADS
 public:
 	__device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
 	{
@@ -3192,8 +3194,8 @@ private:
     const int DMA_COL_ITERS_FULL;
     const int DMA_COL_ITERS_SPLIT;
 public:
-    __device__ cudaDMAIndirect(const int DMA_THREADS,
-                              const int *offs,
+#define DMA_THREADS  blockDim.x
+    __device__ cudaDMAIndirect(const int *offs,
                               const int BYTES_PER_ELMT,
                               const int NUM_ELMTS,
                               const int dmaID=0,
@@ -3211,6 +3213,7 @@ public:
       DEBUG_PRINT;
 #endif
     }
+#undef DMA_THREADS
 public:
   __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
   {
@@ -3334,8 +3337,8 @@ private:
     const int DMA_ROW_ITERS_SPLIT;
     const int DMA_COL_ITERS_FULL;
 public:
-    __device__ cudaDMAIndirect(const int DMA_THREADS,
-                              const int *offs,
+#define DMA_THREADS  blockDim.x 
+    __device__ cudaDMAIndirect(const int *offs,
                               const int NUM_ELMTS,
                               const int dmaID=0,
                               const int num_compute_threads=0,
@@ -3347,6 +3350,7 @@ public:
     {
       cudaDMAIndirectBase<GATHER>::template initialize_indirect<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
     }
+#undef DMA_THREADS
 public:
   __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
   {

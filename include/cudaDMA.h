@@ -843,9 +843,10 @@ private:
   bool is_partial_thread;  // If true, then only some of BYTES_PER_THREAD will be transferred for this thread
   int partial_thread_bytes;
 public:
-  __device__ cudaDMASequential (const int dmaID=0,
-				const int num_compute_threads=0,
-				const int dma_threadIdx_start=0)
+#define dmaID  0
+#define num_compute_threads  0
+#define dma_threadIdx_start  0
+  __device__ cudaDMASequential()
       : CUDADMA_BASE (  dmaID,                            
                         DMA_THREADS,                      
                         num_compute_threads,              
@@ -870,6 +871,9 @@ public:
     {
       SEQUENTIAL_INIT(BYTES_PER_ELMT,DMA_THREADS);
     }
+#undef dmaID
+#undef num_compute_threads
+#undef dma_threadIdx_start
 public:
   __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
   {
@@ -958,10 +962,10 @@ private:
   int partial_thread_bytes;
 public:
 #define DMA_THREADS  blockDim.x
-  __device__ cudaDMASequential (const int BYTES_PER_ELMT,
-                                const int dmaID=0,
-                                const int num_compute_threads=0,
-                                const int dma_threadIdx_start=0)
+#define dmaID  0
+#define num_compute_threads  0
+#define dma_threadIdx_start  0
+  __device__ cudaDMASequential (const int BYTES_PER_ELMT)
     : CUDADMA_BASE (    dmaID,                            
                         DMA_THREADS,                  
                         num_compute_threads,              
@@ -989,6 +993,9 @@ public:
     SEQUENTIAL_INIT(BYTES_PER_ELMT,DMA_THREADS);
   }
 #undef DMA_THREADS
+#undef dmaID
+#undef num_compute_threads
+#undef dma_threadIdx_start
 public:
   __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
   {
@@ -1073,9 +1080,10 @@ private:
   int partial_thread_bytes;
 public:
 #define DMA_THREADS  blockDim.x
-  __device__ cudaDMASequential (const int dmaID=0,
-                                const int num_compute_threads=0,
-                                const int dma_threadIdx_start=0)
+#define dmaID  0
+#define num_compute_threads  0
+#define dma_threadIdx_start  0
+  __device__ cudaDMASequential()
     : CUDADMA_BASE (    dmaID,                            
                         DMA_THREADS,                      
                         num_compute_threads,              
@@ -1102,6 +1110,9 @@ public:
     SEQUENTIAL_INIT(BYTES_PER_ELMT,DMA_THREADS);
   }
 #undef DMA_THREADS
+#undef dmaID
+#undef num_compute_threads
+#undef dma_threadIdx_start
 public:
   __device__ __forceinline__ void execute_dma( void * src_ptr, void * dst_ptr) const
   {
@@ -2123,26 +2134,25 @@ template<int ALIGNMENT, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
 class cudaDMAStrided<false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : public cudaDMAStridedBase 
 {
 public:
+#define dmaID  0
+#define num_compute_threads  0
+#define dma_threadIdx_start  0
   // Constructor for when dst_stride == BYTES_PER_ELMT
-  __device__ cudaDMAStrided (const int el_stride,
-                             const int dmaID=0,
-			     const int num_compute_threads=0,
-			     const int dma_threadIdx_start=0)
+  __device__ cudaDMAStrided (const int el_stride)
 		: SINGLE_STRIDED_BASE
 	{
 		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,NUM_ELMTS,THREADS_PER_ELMT,WARPS_PER_ELMT,COL_ITERS_FULL>(CUDADMA_WARP_TID);
 	}
   // Constructor for explicit destination stride
   __device__ cudaDMAStrided (const int src_stride,
-                             const int dst_stride,
-                             const int dmaID=0,
-			     const int num_compute_threads=0,
-			     const int dma_threadIdx_start=0)
+                             const int dst_stride)
 		: DOUBLE_STRIDED_BASE
 	{
 		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,NUM_ELMTS,THREADS_PER_ELMT,WARPS_PER_ELMT,COL_ITERS_FULL>(CUDADMA_WARP_TID);
 	}
-
+#undef dmaID
+#undef num_compute_threads
+#undef dma_threadIdx_start
 public:
   __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
   {
@@ -2283,12 +2293,12 @@ private:
 	const int DMA_COL_ITERS_SPLIT;
 public:
 #define DMA_THREADS blockDim.x
+#define dmaID  0
+#define num_compute_threads  0
+#define dma_threadIdx_start  0
 	__device__ cudaDMAStrided(const int BYTES_PER_ELMT,
 				const int NUM_ELMTS,
-				const int el_stride,
-                                const int dmaID=0,
-                                const int num_compute_threads=0,
-				const int dma_threadIdx_start=0)
+				const int el_stride)
 		: SINGLE_STRIDED_BASE,
 		ELMT_LDS (LDS_PER_ELMT_PER_THREAD),
 		DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
@@ -2302,10 +2312,7 @@ public:
 	__device__ cudaDMAStrided(const int BYTES_PER_ELMT,
 				const int NUM_ELMTS,
 				const int src_stride,
-				const int dst_stride,
-                                const int dmaID=0,
-                                const int num_compute_threads=0,
-				const int dma_threadIdx_start=0)
+				const int dst_stride)
 		: DOUBLE_STRIDED_BASE,
 		ELMT_LDS (LDS_PER_ELMT_PER_THREAD),
 		DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
@@ -2316,6 +2323,9 @@ public:
 		initialize_strided<ALIGNMENT>(LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,NUM_ELMTS,THREADS_PER_ELMT,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
 	}
 #undef DMA_THREADS
+#undef dmaID
+#undef num_compute_threads
+#undef dma_threadIdx_start
 public:
 	__device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
 	{
@@ -2446,11 +2456,11 @@ private:
 	const int DMA_COL_ITERS_FULL;
 public:
 #define DMA_THREADS  blockDim.x
+#define dmaID  0
+#define num_compute_threads  0
+#define dma_threadIdx_start  0
 	__device__ cudaDMAStrided(const int NUM_ELMTS,
-				const int el_stride,
-                                const int dmaID=0,
-                                const int num_compute_threads=0,
-				const int dma_threadIdx_start=0)
+				const int el_stride)
 		: SINGLE_STRIDED_BASE,
 		DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
 		DMA_ROW_ITERS_SPLIT (ROW_ITERS_SPLIT),
@@ -2461,10 +2471,7 @@ public:
 
 	__device__ cudaDMAStrided(const int NUM_ELMTS,
 				const int src_stride,
-				const int dst_stride,
-                                const int dmaID=0,
-                                const int num_compute_threads=0,
-				const int dma_threadIdx_start=0)
+				const int dst_stride)
 		: DOUBLE_STRIDED_BASE,
 		DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
 		DMA_ROW_ITERS_SPLIT (ROW_ITERS_SPLIT),
@@ -2473,6 +2480,9 @@ public:
 		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
 	}
 #undef DMA_THREADS
+#undef dmaID
+#undef num_compute_threads
+#undef dma_threadIdx_start
 public:
 	__device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
 	{
@@ -2599,11 +2609,11 @@ private:
 	const int DMA_ROW_ITERS_SPLIT;
 	const int DMA_COL_ITERS_FULL;
 public:
+#define dmaID  0
+#define num_compute_threads  0
+#define dma_threadIdx_start  0
 	__device__ cudaDMAStrided(const int NUM_ELMTS,
-				const int el_stride,
-                                const int dmaID=0,
-                                const int num_compute_threads=0,
-				const int dma_threadIdx_start=0)
+				const int el_stride)
 		: SINGLE_STRIDED_BASE,
 		DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
 		DMA_ROW_ITERS_SPLIT (ROW_ITERS_SPLIT),
@@ -2614,10 +2624,7 @@ public:
 
 	__device__ cudaDMAStrided(const int NUM_ELMTS,
 				const int src_stride,
-				const int dst_stride,
-                                const int dmaID=0,
-                                const int num_compute_threads=0,
-				const int dma_threadIdx_start=0)
+				const int dst_stride)
 		: DOUBLE_STRIDED_BASE,
 		DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
 		DMA_ROW_ITERS_SPLIT (ROW_ITERS_SPLIT),
@@ -2625,6 +2632,9 @@ public:
 	{
 		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
 	}
+#undef dmaID
+#undef num_compute_threads
+#undef dma_threadIdx_start
 public:
 	__device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
 	{
@@ -3051,10 +3061,10 @@ protected:
 template<bool GATHER, int ALIGNMENT, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
 class cudaDMAIndirect<GATHER,false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : public cudaDMAIndirectBase<GATHER> {
 public:
-    __device__ cudaDMAIndirect(const int* offs,
-                               const int dmaID=0,
-                               const int num_compute_threads=0,
-                               const int dma_threadIdx_start=0)
+#define dmaID  0
+#define num_compute_threads  0
+#define dma_threadIdx_start  0
+    __device__ cudaDMAIndirect(const int* offs)
       : INDIRECT_BASE
     {
       cudaDMAIndirectBase<GATHER>::template initialize_indirect<ALIGNMENT, LDS_PER_ELMT_PER_THREAD, BYTES_PER_ELMT, NUM_ELMTS, THREADS_PER_ELMT, WARPS_PER_ELMT, COL_ITERS_FULL>(CUDADMA_WARP_TID);
@@ -3062,6 +3072,9 @@ public:
       DEBUG_PRINT;
 #endif
     }
+#undef dmaID
+#undef num_compute_threads
+#undef dma_threadIdx_start
 public:
   __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
   {
@@ -3196,12 +3209,12 @@ private:
     const int DMA_COL_ITERS_SPLIT;
 public:
 #define DMA_THREADS  blockDim.x
+#define dmaID  0
+#define num_compute_threads  0
+#define dma_threadIdx_start  0
     __device__ cudaDMAIndirect(const int *offs,
                               const int BYTES_PER_ELMT,
-                              const int NUM_ELMTS,
-                              const int dmaID=0,
-                              const int num_compute_threads=0,
-                              const int dma_threadIdx_start=0)
+                              const int NUM_ELMTS)
       : INDIRECT_BASE,
       ELMT_LDS (LDS_PER_ELMT_PER_THREAD),
       DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
@@ -3215,6 +3228,9 @@ public:
 #endif
     }
 #undef DMA_THREADS
+#undef dmaID
+#undef num_compute_threads
+#undef dma_threadIdx_start
 public:
   __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
   {
@@ -3339,11 +3355,11 @@ private:
     const int DMA_COL_ITERS_FULL;
 public:
 #define DMA_THREADS  blockDim.x 
+#define dmaID  0
+#define num_compute_threads  0
+#define dma_threadIdx_start  0
     __device__ cudaDMAIndirect(const int *offs,
-                              const int NUM_ELMTS,
-                              const int dmaID=0,
-                              const int num_compute_threads=0,
-                              const int dma_threadIdx_start=0)
+                              const int NUM_ELMTS)
       : INDIRECT_BASE,
       DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
       DMA_ROW_ITERS_SPLIT (ROW_ITERS_SPLIT),
@@ -3352,6 +3368,9 @@ public:
       cudaDMAIndirectBase<GATHER>::template initialize_indirect<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
     }
 #undef DMA_THREADS
+#undef dmaID
+#undef num_compute_threads
+#undef dma_threadIdx_start
 public:
   __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
   {
@@ -3475,11 +3494,11 @@ private:
     const int DMA_ROW_ITERS_SPLIT;
     const int DMA_COL_ITERS_FULL;
 public:
+#define dmaID  0
+#define num_compute_threads  0
+#define dma_threadIdx_start  0
     __device__ cudaDMAIndirect(const int *offs,
-                              const int NUM_ELMTS,
-                              const int dmaID=0,
-                              const int num_compute_threads=0,
-                              const int dma_threadIdx_start=0)
+                              const int NUM_ELMTS)
       : INDIRECT_BASE,
       DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
       DMA_ROW_ITERS_SPLIT (ROW_ITERS_SPLIT),
@@ -3487,6 +3506,9 @@ public:
     {
       cudaDMAIndirectBase<GATHER>::template initialize_indirect<ALIGNMENT, LDS_PER_ELMT_PER_THREAD, BYTES_PER_ELMT, THREADS_PER_ELMT>(NUM_ELMTS, WARPS_PER_ELMT, COL_ITERS_FULL, CUDADMA_WARP_TID); 
     }
+#undef dmaID
+#undef num_compute_threads
+#undef dma_threadIdx_start
 public:
   __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
   {

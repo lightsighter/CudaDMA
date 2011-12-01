@@ -8,8 +8,12 @@ MAX_ELMT_SIZE=8192 # in floats
 MAX_NUM_ELMTS=32
 MAX_DMA_WARPS=16
 
-def run_experiment(gather,alignment,offset,elem_size,num_elmts,dma_warps,num_templates,random_seed):
+def run_experiment(specialized,gather,alignment,offset,elem_size,num_elmts,dma_warps,num_templates,random_seed):
     f = open("params_directed.h",'w')
+    if specialized:
+        f.write("#define PARAM_SPECIALIZED true\n")
+    else:
+        f.write("#define PARAM_SPECIALIZED false\n")
     if gather:
         f.write("#define PARAM_GATHER true\n")
     else:
@@ -71,7 +75,8 @@ def run_random_experiments():
         #    above += 1
         #else:
         #    below += 1
-        run_experiment(gather,alignment,offset,elem_size,num_elems,warps,num_templates,random_seed)
+        specialized = random.randint(0,1)
+        run_experiment(specialized,gather,alignment,offset,elem_size,num_elems,warps,num_templates,random_seed)
     #print "Above "+str(above)+" Below "+str(below)
 
 def main():

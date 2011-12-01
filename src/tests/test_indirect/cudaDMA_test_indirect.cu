@@ -421,8 +421,177 @@ dma_scatter_one( float *odata, int *offsets, int buffer_size, int num_compute_th
   }
 }
 
+__device__
+void zero_buffer(float *buffer, const int buffer_size)
+{
+  int iters = buffer_size/blockDim.x;
+  int index = threadIdx.x;
+  for (int i = 0; i<iters; i++)
+  {
+    buffer[index] = 0.0f;
+    index += blockDim.x;
+  }
+  if (index < buffer_size)
+    buffer[index] = 0.0f;
+}
+
+__device__
+void copy_buffer(float *buffer, float *dst, const int buffer_size)
+{
+  int iters = buffer_size/blockDim.x;
+  int index = threadIdx.x;
+  for (int i = 0; i<iters; i++)
+  {
+    dst[index] = buffer[index];
+    index += blockDim.x;
+  }
+  if (index < buffer_size)
+    dst[index] = buffer[index];
+}
 
 template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS>
+__global__ void __launch_bounds__(1024,1)
+simple_gather_four(float *idata, float *odata, int *offsets, int buffer_size)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMAIndirect<true,false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
+    dma0(offsets);
+
+  zero_buffer(buffer, buffer_size);
+  __syncthreads();
+  float *base_ptr = &(idata[ALIGN_OFFSET]);
+  dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+  __syncthreads();
+  copy_buffer(buffer, odata, buffer_size);
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int DMA_THREADS>
+__global__ void __launch_bounds__(1024,1)
+simple_gather_three(float *idata, float *odata, int *offsets, int buffer_size, int num_elmts)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMAIndirect<true,false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
+    dma0(offsets,num_elmts);
+
+  zero_buffer(buffer,buffer_size);
+  __syncthreads();
+  float *base_ptr = &(idata[ALIGN_OFFSET]);
+  dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+  __syncthreads();
+  copy_buffer(buffer, odata, buffer_size);
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT>
+__global__ void __launch_bounds__(1024,1)
+simple_gather_two(float *idata, float *odata, int *offsets, int buffer_size, int num_elmts)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMAIndirect<true,false,ALIGNMENT,BYTES_PER_ELMT>
+    dma0(offsets,num_elmts);
+
+  zero_buffer(buffer,buffer_size);
+  __syncthreads();
+  float *base_ptr = &(idata[ALIGN_OFFSET]);
+  dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+  __syncthreads();
+  copy_buffer(buffer, odata, buffer_size);
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET>
+__global__ void __launch_bounds__(1024,1)
+simple_gather_one(float *idata, float *odata, int *offsets, int buffer_size, int bytes_per_elmt, int num_elmts)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMAIndirect<true,false,ALIGNMENT>
+    dma0(offsets,bytes_per_elmt,num_elmts);
+
+  zero_buffer(buffer,buffer_size);
+  __syncthreads();
+  float *base_ptr = &(idata[ALIGN_OFFSET]);
+  dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+  __syncthreads();
+  copy_buffer(buffer, odata, buffer_size);
+}
+
+__device__
+void initialize_buffer(float *buffer, const int buffer_size)
+{
+  int iters = buffer_size/blockDim.x;
+  int index = threadIdx.x;
+  for (int i=0; i<iters; i++)
+  {
+    buffer[index] = index;
+    index += blockDim.x;
+  }
+  if (index < buffer_size)
+    buffer[index] = index;
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS>
+__global__ void __launch_bounds__(1024,1)
+simple_scatter_four(float *odata, int *offsets, int buffer_size)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMAIndirect<false,false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
+    dma0(offsets);
+
+  initialize_buffer(buffer, buffer_size);
+  __syncthreads();
+  float *base_ptr = &(odata[ALIGN_OFFSET]);
+  dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int DMA_THREADS>
+__global__ void __launch_bounds__(1024,1)
+simple_scatter_three(float *odata, int *offsets, int buffer_size, int num_elmts)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMAIndirect<false,false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
+    dma0(offsets, num_elmts);
+
+  initialize_buffer(buffer, buffer_size);
+  __syncthreads();
+  float *base_ptr = &(odata[ALIGN_OFFSET]);
+  dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT>
+__global__ void __launch_bounds__(1024,1)
+simple_scatter_two(float *odata, int *offsets, int buffer_size, int num_elmts)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMAIndirect<false,false,ALIGNMENT,BYTES_PER_ELMT>
+    dma0(offsets, num_elmts);
+
+  initialize_buffer(buffer, buffer_size);
+  __syncthreads();
+  float *base_ptr = &(odata[ALIGN_OFFSET]);
+  dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET>
+__global__ void __launch_bounds__(1024,1)
+simple_scatter_one(float *odata, int *offsets, int buffer_size, int bytes_per_elmt, int num_elmts)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMAIndirect<false,false,ALIGNMENT>
+    dma0(offsets,bytes_per_elmt,num_elmts);
+
+  initialize_buffer(buffer, buffer_size);
+  __syncthreads();
+  float *base_ptr = &(odata[ALIGN_OFFSET]);
+  dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+}
+
+template<bool SPECIALIZED, int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS>
 __host__ bool run_gather_experiment(int *h_offsets, int max_index/*floats*/, int num_templates)
 {
   int shared_buffer_size = (NUM_ELMTS*BYTES_PER_ELMT/sizeof(float) + ALIGN_OFFSET);
@@ -456,36 +625,77 @@ __host__ bool run_gather_experiment(int *h_offsets, int max_index/*floats*/, int
   CUDA_SAFE_CALL( cudaMemcpy( d_offsets, h_offsets, NUM_ELMTS*sizeof(int), cudaMemcpyHostToDevice));
 
   int num_compute_warps = 1;
-  int total_threads = (num_compute_warps)*WARP_SIZE + DMA_THREADS;
+  int total_threads = 0;
+  if (SPECIALIZED)
+    total_threads = (num_compute_warps)*WARP_SIZE + DMA_THREADS;
+  else
+    total_threads = DMA_THREADS;
+  assert(total_threads > 0);
 
   switch (num_templates)
   {
     case 4:
       {
-        dma_gather_four<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT, NUM_ELMTS, DMA_THREADS>
-          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-          (d_idata, d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE); 
+        if (SPECIALIZED)
+        {
+          dma_gather_four<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT, NUM_ELMTS, DMA_THREADS>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_idata, d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE); 
+        }
+        else
+        {
+          simple_gather_four<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT, NUM_ELMTS, DMA_THREADS>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_idata, d_odata, d_offsets, shared_buffer_size);
+        }
         break;
       }
     case 3:
       {
-        dma_gather_three<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT, DMA_THREADS>
-          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-          (d_idata, d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE, NUM_ELMTS);
+        if (SPECIALIZED)
+        {
+          dma_gather_three<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT, DMA_THREADS>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_idata, d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE, NUM_ELMTS);
+        }
+        else
+        {
+          simple_gather_three<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT, DMA_THREADS>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_idata, d_odata, d_offsets, shared_buffer_size, NUM_ELMTS);
+        }
         break;
       }
     case 2:
       {
-        dma_gather_two<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT>
-          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-          (d_idata, d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE, DMA_THREADS, NUM_ELMTS);
+        if (SPECIALIZED)
+        {
+          dma_gather_two<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_idata, d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE, DMA_THREADS, NUM_ELMTS);
+        }
+        else
+        {
+          simple_gather_two<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_idata, d_odata, d_offsets, shared_buffer_size, NUM_ELMTS); 
+        }
         break;
       }
     case 1:
       {
-        dma_gather_one<ALIGNMENT,ALIGN_OFFSET>
-          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-          (d_idata, d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE, DMA_THREADS, BYTES_PER_ELMT, NUM_ELMTS);
+        if (SPECIALIZED)
+        {
+          dma_gather_one<ALIGNMENT,ALIGN_OFFSET>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_idata, d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE, DMA_THREADS, BYTES_PER_ELMT, NUM_ELMTS);
+        }
+        else
+        {
+          simple_gather_one<ALIGNMENT,ALIGN_OFFSET>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_idata, d_odata, d_offsets, shared_buffer_size, BYTES_PER_ELMT, NUM_ELMTS);
+        }
         break;
       }
     default:
@@ -544,7 +754,7 @@ __host__ bool run_gather_experiment(int *h_offsets, int max_index/*floats*/, int
   return pass;
 }
 
-template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS>
+template<bool SPECIALIZED, int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS>
 __host__ bool run_scatter_experiment(int *h_offsets, int max_index/*floats*/, int num_templates)
 {
   int shared_buffer_size = (NUM_ELMTS*BYTES_PER_ELMT/sizeof(float) + ALIGN_OFFSET);
@@ -572,35 +782,77 @@ __host__ bool run_scatter_experiment(int *h_offsets, int max_index/*floats*/, in
   CUDA_SAFE_CALL( cudaMemcpy(d_offsets, h_offsets, NUM_ELMTS*sizeof(int), cudaMemcpyHostToDevice));
 
   int num_compute_warps = 1;
-  int total_threads = (num_compute_warps)*WARP_SIZE + DMA_THREADS;
+  int total_threads = 0;
+  if (SPECIALIZED)
+    total_threads = (num_compute_warps)*WARP_SIZE + DMA_THREADS;
+  else
+    total_threads = DMA_THREADS;
+  assert(total_threads > 0);
+
   switch (num_templates)
   {
     case 4:
       {
-        dma_scatter_four<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT, NUM_ELMTS, DMA_THREADS>
-          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-          (d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE);
+        if (SPECIALIZED)
+        {
+          dma_scatter_four<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT, NUM_ELMTS, DMA_THREADS>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE);
+        }
+        else
+        {
+          simple_scatter_four<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT, NUM_ELMTS, DMA_THREADS>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_odata, d_offsets, shared_buffer_size);
+        }
         break;
       }
     case 3:
       {
-        dma_scatter_three<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT, DMA_THREADS>
-          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-          (d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE,NUM_ELMTS);
+        if (SPECIALIZED)
+        {
+          dma_scatter_three<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT, DMA_THREADS>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE,NUM_ELMTS);
+        }
+        else
+        {
+          simple_scatter_three<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT, DMA_THREADS>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_odata, d_offsets, shared_buffer_size, NUM_ELMTS);
+        }
         break;
       }
     case 2:
       {
-        dma_scatter_two<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT>
-          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-          (d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE,DMA_THREADS,NUM_ELMTS);
+        if (SPECIALIZED)
+        {
+          dma_scatter_two<ALIGNMENT, ALIGN_OFFSET, BYTES_PER_ELMT>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE,DMA_THREADS,NUM_ELMTS);
+        }
+        else
+        {
+          simple_scatter_two<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_odata, d_offsets, shared_buffer_size, NUM_ELMTS);
+        }
         break;
       }
     case 1:
       {
-        dma_scatter_one<ALIGNMENT, ALIGN_OFFSET>
-          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-          (d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE,DMA_THREADS,BYTES_PER_ELMT,NUM_ELMTS);
+        if (SPECIALIZED)
+        {
+          dma_scatter_one<ALIGNMENT, ALIGN_OFFSET>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_odata, d_offsets, shared_buffer_size, num_compute_warps*WARP_SIZE,DMA_THREADS,BYTES_PER_ELMT,NUM_ELMTS);
+        }
+        else
+        {
+          simple_scatter_one<ALIGNMENT,ALIGN_OFFSET>
+            <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+            (d_odata, d_offsets, shared_buffer_size, BYTES_PER_ELMT, NUM_ELMTS);
+        }
         break;
       }
     default:
@@ -708,13 +960,16 @@ int main()
 #endif
   printf("\n");
   assert(max_offset != -1);
-  fprintf(stdout,"%s Experiment: ALIGNMENT-%2d OFFSET-%d ELMT_SIZE-%5d NUM_ELMTS-%2d DMA_WARPS-%2d NUM_TEMPLATES-%d ",(PARAM_GATHER?"GATHER":"SCATTER"),PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS/32,PARAM_NUM_TEMPLATES); 
+  if (PARAM_SPECIALIZED)
+    fprintf(stdout,"%s Warp-Specialized Experiment: ALIGNMENT-%2d OFFSET-%d ELMT_SIZE-%5d NUM_ELMTS-%2d DMA_WARPS-%2d NUM_TEMPLATES-%d ",(PARAM_GATHER?"GATHER":"SCATTER"),PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS/WARP_SIZE,PARAM_NUM_TEMPLATES); 
+  else
+    fprintf(stdout,"%s Non-Warp-Specialized Experiment: ALIGNMENT-%2d OFFSET-%d ELMT_SIZE-%5d NUM_ELMTS-%2d TOTAL_WARPS-%2d NUM_TEMPLATES-%d ",(PARAM_GATHER?"GATHER":"SCATTER"),PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS/WARP_SIZE,PARAM_NUM_TEMPLATES);
   fflush(stdout);
   bool result;
   if (PARAM_GATHER)
-    result = run_gather_experiment<PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS>(offsets, max_offset+PARAM_ELMT_SIZE/sizeof(float),PARAM_NUM_TEMPLATES);
+    result = run_gather_experiment<PARAM_SPECIALIZED,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS>(offsets, max_offset+PARAM_ELMT_SIZE/sizeof(float),PARAM_NUM_TEMPLATES);
   else
-    result = run_gather_experiment<PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS>(offsets, max_offset+PARAM_ELMT_SIZE/sizeof(float),PARAM_NUM_TEMPLATES);
+    result = run_gather_experiment<PARAM_SPECIALIZED,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS>(offsets, max_offset+PARAM_ELMT_SIZE/sizeof(float),PARAM_NUM_TEMPLATES);
   fprintf(stdout,"RESULT: %s\n",(result?"SUCCESS":"FAILURE"));
   fflush(stdout);
 

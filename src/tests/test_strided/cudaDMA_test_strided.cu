@@ -266,7 +266,103 @@ dma_ld_test_one ( float *idata, float *odata, int src_stride/*bytes*/, int dst_s
 	}
 }	
 
-template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS, int NUM_TEMPLATE_PARAMS>
+__device__
+void zero_buffer(float *buffer, const int buffer_size)
+{
+  int iters = buffer_size/blockDim.x;
+  int index = threadIdx.x;
+  for (int i = 0; i<iters; i++)
+  {
+    buffer[index] = 0.0f;
+    index += blockDim.x;
+  }
+  if (index < buffer_size)
+    buffer[index] = 0.0f;
+}
+
+__device__
+void copy_buffer(float *buffer, float *dst, const int buffer_size)
+{
+  int iters = buffer_size/blockDim.x;
+  int index = threadIdx.x;
+  for (int i = 0; i<iters; i++)
+  {
+    dst[index] = buffer[index];
+    index += blockDim.x;
+  }
+  if (index < buffer_size)
+    dst[index] = buffer[index];
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS>
+__global__ void __launch_bounds__(1024,1)
+simple_test_four(float *idata, float *odata, int src_stride, int dst_stride, int buffer_size)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMAStrided<false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
+    dma0(src_stride, dst_stride);
+
+  zero_buffer(buffer, buffer_size);
+  __syncthreads();
+  float *base_ptr = &(idata[ALIGN_OFFSET]);
+  dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+  __syncthreads();
+  copy_buffer(buffer,odata,buffer_size);
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int DMA_THREADS>
+__global__ void __launch_bounds__(1024,1)
+simple_test_three(float *idata, float *odata, int src_stride, int dst_stride, int buffer_size, int num_elmts)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMAStrided<false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
+    dma0(num_elmts, src_stride, dst_stride);
+  
+  zero_buffer(buffer, buffer_size);
+  __syncthreads();
+  float *base_ptr = &(idata[ALIGN_OFFSET]);
+  dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+  __syncthreads();
+  copy_buffer(buffer, odata, buffer_size);
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT>
+__global__ void __launch_bounds__(1024,1)
+simple_test_two(float *idata, float *odata, int src_stride, int dst_stride, int buffer_size, int num_elmts)
+{
+  extern __shared__ float buffer[];
+
+  cudaDMAStrided<false,ALIGNMENT,BYTES_PER_ELMT>
+    dma0(num_elmts, src_stride, dst_stride);
+
+  zero_buffer(buffer, buffer_size);
+  __syncthreads();
+  float *base_ptr = &(idata[ALIGN_OFFSET]);
+  dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+  __syncthreads();
+  copy_buffer(buffer, odata, buffer_size);
+}
+
+template<int ALIGNMENT, int ALIGN_OFFSET>
+__global__ void __launch_bounds__(1024,1)
+simple_test_one(float *idata, float *odata, int src_stride, int dst_stride, int buffer_size, int bytes_per_elmt, int num_elmts)
+{
+  extern __shared__ float buffer[];
+  
+  cudaDMAStrided<false,ALIGNMENT>
+    dma0(bytes_per_elmt, num_elmts, src_stride, dst_stride);
+
+  zero_buffer(buffer, buffer_size);
+  __syncthreads();
+  float *base_ptr = &(idata[ALIGN_OFFSET]);
+  dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+  __syncthreads();
+  copy_buffer(buffer, odata, buffer_size);
+}
+
+template<bool SPECIALIZED, int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS, int NUM_TEMPLATE_PARAMS>
 __host__ bool run_experiment(int src_stride /*in floats*/, int dst_stride/*in floats*/)
 {
 	// check some assertions
@@ -298,32 +394,73 @@ __host__ bool run_experiment(int src_stride /*in floats*/, int dst_stride/*in fl
 	CUDA_SAFE_CALL( cudaMemcpy( d_odata, h_odata, output_size*sizeof(float), cudaMemcpyHostToDevice));
 
 	int num_compute_warps = 1;
-	int total_threads = (num_compute_warps)*WARP_SIZE + DMA_THREADS;
+        int total_threads = 0;
+        if (SPECIALIZED)
+          total_threads = (num_compute_warps)*WARP_SIZE + DMA_THREADS;
+        else
+          total_threads = DMA_THREADS;
+        assert(total_threads > 0);
 
 	switch (NUM_TEMPLATE_PARAMS)
 	{
 	case 1:
-		dma_ld_test_one<ALIGNMENT,ALIGN_OFFSET>
-			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-			(d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, num_compute_warps*WARP_SIZE,
-			BYTES_PER_ELMT,NUM_ELMTS,DMA_THREADS);
+                if (SPECIALIZED)
+                {
+                  dma_ld_test_one<ALIGNMENT,ALIGN_OFFSET>
+                          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+                          (d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, num_compute_warps*WARP_SIZE,
+                          BYTES_PER_ELMT,NUM_ELMTS,DMA_THREADS);
+                }
+                else
+                {
+                  simple_test_one<ALIGNMENT,ALIGN_OFFSET>
+                    <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+                    (d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, BYTES_PER_ELMT, NUM_ELMTS);
+                }
 		break;	
 	case 2:
-		dma_ld_test_two<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT>
-			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-			(d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, num_compute_warps*WARP_SIZE,
-			NUM_ELMTS,DMA_THREADS);
+                if (SPECIALIZED)
+                {
+                  dma_ld_test_two<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT>
+                          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+                          (d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, num_compute_warps*WARP_SIZE,
+                          NUM_ELMTS,DMA_THREADS);
+                }
+                else
+                {
+                  simple_test_two<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT>
+                    <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+                    (d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, NUM_ELMTS);
+                }
 		break;
 	case 3:
-		dma_ld_test_three<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,DMA_THREADS>
-			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-			(d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, num_compute_warps*WARP_SIZE,
-			NUM_ELMTS);
+                if (SPECIALIZED)
+                {
+                  dma_ld_test_three<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,DMA_THREADS>
+                          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+                          (d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, num_compute_warps*WARP_SIZE,
+                          NUM_ELMTS);
+                }
+                else
+                {
+                  simple_test_three<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,DMA_THREADS>
+                    <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+                    (d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, NUM_ELMTS);
+                }
 		break;
 	case 4:
-		dma_ld_test_four<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,DMA_THREADS>
-			<<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-			(d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, num_compute_warps*WARP_SIZE);
+                if (SPECIALIZED)
+                {
+                  dma_ld_test_four<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,DMA_THREADS>
+                          <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+                          (d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, num_compute_warps*WARP_SIZE);
+                }
+                else
+                {
+                  simple_test_four<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_ELMT,NUM_ELMTS,DMA_THREADS>
+                    <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
+                    (d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size);
+                }
 		break;
 	default:
 		assert(false);
@@ -858,9 +995,12 @@ int main()
 	const int element_size = PARAM_ELMT_SIZE/sizeof(float);
 	const int min_stride = element_size + (element_size%(PARAM_ALIGNMENT/sizeof(float)) ? 
 					((PARAM_ALIGNMENT/sizeof(float))-(element_size%(PARAM_ALIGNMENT/sizeof(float)))) : 0);
-	fprintf(stdout,"Experiment: ALIGNMENT-%2d OFFSET-%d ELMT_SIZE-%5d NUM_ELMTS-%2d DMA_WARPS-%2d NUM_TEMPLATES-%d ",PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS/32,PARAM_NUM_TEMPLATES); 
+        if (PARAM_SPECIALIZED)
+          fprintf(stdout,"Warp-Specialied Experiment: ALIGNMENT-%2d OFFSET-%d ELMT_SIZE-%5d NUM_ELMTS-%2d DMA_WARPS-%2d NUM_TEMPLATES-%d ",PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS/WARP_SIZE,PARAM_NUM_TEMPLATES); 
+        else
+          fprintf(stdout,"Non-Warp-Specialized Experiment: ALIGNMENT-%2d OFFSET-%d ELMT_SIZE-%5d NUM_ELMTS-%2d TOTAL_WARPS-%2d NUM_TEMPLATES-%d ",PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS/WARP_SIZE,PARAM_NUM_TEMPLATES);
 	fflush(stdout);
-	bool result = run_experiment<PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS,PARAM_NUM_TEMPLATES>(min_stride,min_stride);
+	bool result = run_experiment<PARAM_SPECIALIZED,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS,PARAM_NUM_TEMPLATES>(min_stride,min_stride);
 	fprintf(stdout,"RESULT: %s\n",(result?"SUCCESS":"FAILURE"));
 	fflush(stdout);
 #else

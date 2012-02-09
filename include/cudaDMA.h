@@ -90,7 +90,7 @@ class cudaDMA {
                       const unsigned long int dma3_src_offs, 
                       const unsigned long int dma4_src_offs
 		      ) : 
-    is_dma_thread ((threadIdx.x>=dma_threadIdx_start) && (threadIdx.x<(dma_threadIdx_start+num_dma_threads))),
+    is_dma_thread ((int(threadIdx.x)>=dma_threadIdx_start) && (int(threadIdx.x)<(dma_threadIdx_start+num_dma_threads))),
     dma_tid (CUDADMA_DMA_TID),
     barrierID_empty ((dmaID<<1)+1),
     barrierID_full (dmaID<<1),
@@ -136,7 +136,7 @@ class cudaDMA {
                       const unsigned long int dma3_dst_offs, 
                       const unsigned long int dma4_dst_offs
 		      ) : 
-    is_dma_thread ((threadIdx.x>=dma_threadIdx_start) && (threadIdx.x<(dma_threadIdx_start+num_dma_threads))),
+    is_dma_thread ((int(threadIdx.x)>=dma_threadIdx_start) && (int(threadIdx.x)<(dma_threadIdx_start+num_dma_threads))),
     dma_tid (CUDADMA_DMA_TID),
     barrierID_empty ((dmaID<<1)+1),
     barrierID_full (dmaID<<1),
@@ -3596,8 +3596,8 @@ protected:
 // For a given row, figure out how many warps there are loading it
 // There will always be at least 2 rows
 #define WARPS_PER_ROW (ROWS_PER_STEP == 1 ? (num_dma_threads/WARP_SIZE) : (ROW_ID < (ROWS_PER_STEP-1) ? MAX_WARPS_PER_ROW : (num_dma_threads/WARP_SIZE) - (ROWS_PER_STEP-1)*MAX_WARPS_PER_ROW))
-//#define WARPS_PER_ROW ((MAX_WARPS_PER_ROW >= (num_dma_threads/WARP_SIZE)) ? (num_dma_threads/WARP_SIZE) : \
-	(num_dma_threads/WARP_SIZE)>(MAX_WARPS_PER_ROW*2*RADIUS) ?  (num_dma_threads/WARP_SIZE)/(2*RADIUS) : MAX_WARPS_PER_ROW)
+//#define WARPS_PER_ROW ((MAX_WARPS_PER_ROW >= (num_dma_threads/WARP_SIZE)) ? (num_dma_threads/WARP_SIZE) : 
+//	(num_dma_threads/WARP_SIZE)>(MAX_WARPS_PER_ROW*2*RADIUS) ?  (num_dma_threads/WARP_SIZE)/(2*RADIUS) : MAX_WARPS_PER_ROW)
 //#define ROWS_PER_STEP ((num_dma_threads/WARP_SIZE)/WARPS_PER_ROW)
 //#define ROW_ID ((CUDADMA_DMA_TID/WARP_SIZE)/WARPS_PER_ROW)
 #define CUDADMA_WARP_TID (threadIdx.x - (dma_threadIdx_start + (ROW_ID*MAX_WARPS_PER_ROW*WARP_SIZE)))

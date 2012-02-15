@@ -32,6 +32,17 @@ __device__ __forceinline__ void ptx_cudaDMA_barrier_nonblocking (const int name,
 #define CUDADMA_DMA_TID (threadIdx.x-dma_threadIdx_start)
 #define WARP_SIZE 32
 
+// Enable the restrict keyword to allow additional compiler optimizations
+// Note that this can increase register pressure (see appendix B.2.4 of
+// CUDA Programming Guide)
+#define ENABLE_RESTRICT
+
+#ifdef ENABLE_RESTRICT
+#define RESTRICT __restrict__
+#else
+#define RESTRICT
+#endif
+
 //#define CUDADMA_DEBUG_ON
 //////////////////////////////////////////////////////////////////////////////////////////////////
 // Base class - define common variables and functions:
@@ -175,7 +186,7 @@ class cudaDMA {
 
   // Transfer primitives used by more than one subclass
   template<bool DO_SYNC, int ALIGNMENT>
-    __device__ __forceinline__ void do_xfer( void * src_ptr, void * dst_ptr, int xfer_size) const
+    __device__ __forceinline__ void do_xfer( void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int xfer_size) const
   {
      switch (ALIGNMENT)
        {
@@ -204,7 +215,7 @@ class cudaDMA {
 
   // Manage transfers only aligned to 4 bytes
   template<bool DO_SYNC>
-   __device__ __forceinline__ void do_xfer_alignment_04( void * src_ptr, void * dst_ptr, int xfer_size) const
+   __device__ __forceinline__ void do_xfer_alignment_04( void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int xfer_size) const
   {
     switch (xfer_size)
       {
@@ -243,7 +254,7 @@ class cudaDMA {
 
   // Manage transfers aligned to 8 byte boundary
   template<bool DO_SYNC>
-   __device__ __forceinline__ void do_xfer_alignment_08( void * src_ptr, void * dst_ptr, int xfer_size) const
+   __device__ __forceinline__ void do_xfer_alignment_08( void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int xfer_size) const
   {
     switch (xfer_size)
       {
@@ -302,7 +313,7 @@ class cudaDMA {
 
   // Manage transfers aligned to 16 byte boundary
   template<bool DO_SYNC>
-   __device__ __forceinline__ void do_xfer_alignment_16( void * src_ptr, void * dst_ptr, int xfer_size) const
+   __device__ __forceinline__ void do_xfer_alignment_16( void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int xfer_size) const
   {
     switch (xfer_size) 
       {
@@ -400,7 +411,7 @@ class cudaDMA {
   }
 
   template<bool DO_SYNC>
-  __device__ __forceinline__ void do_xfer_across(void * src_ptr, void * dst_ptr, int total_lds, int xfer_size) const
+  __device__ __forceinline__ void do_xfer_across(void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int total_lds, int xfer_size) const
   {
 	switch (xfer_size)
 	  {
@@ -438,7 +449,7 @@ class cudaDMA {
   }
 
   template<typename TYPE, bool DO_SYNC>
-  __device__ __forceinline__ void perform_xfer_across(void * src_ptr, void * dst_ptr, int total_lds) const
+  __device__ __forceinline__ void perform_xfer_across(void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int total_lds) const
   {
 	switch (total_lds)
 	  {
@@ -480,14 +491,14 @@ class cudaDMA {
    * the predefined offsets.
    */
   template<typename TYPE1, bool DO_SYNC>
-    __device__ __forceinline__ void perform_one_xfer(void *src_ptr, void *dst_ptr) const
+    __device__ __forceinline__ void perform_one_xfer(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     TYPE1 tmp1 = *(TYPE1 *)((char *)src_ptr + dma1_src_offs);
     if (DO_SYNC) CUDADMA_BASE::wait_for_dma_start();
     *(TYPE1 *)((char *)dst_ptr+dma1_dst_offs) = tmp1;
   }
   template<typename TYPE1, typename TYPE2, bool DO_SYNC>
-    __device__ __forceinline__ void perform_two_xfers(void *src_ptr, void *dst_ptr) const
+    __device__ __forceinline__ void perform_two_xfers(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     TYPE1 tmp1 = *(TYPE1 *)((char *)src_ptr + dma1_src_offs);
     TYPE2 tmp2 = *(TYPE2 *)((char *)src_ptr + dma2_src_offs);
@@ -496,7 +507,7 @@ class cudaDMA {
     *(TYPE2 *)((char *)dst_ptr+dma2_dst_offs) = tmp2;
   }
   template<typename TYPE1, typename TYPE2, bool DO_SYNC>
-    __device__ __forceinline__ void perform_three_xfers(void *src_ptr, void *dst_ptr) const
+    __device__ __forceinline__ void perform_three_xfers(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     TYPE1 tmp1 = *(TYPE1 *)((char *)src_ptr + dma1_src_offs);
     TYPE1 tmp2 = *(TYPE1 *)((char *)src_ptr + dma2_src_offs);
@@ -507,7 +518,7 @@ class cudaDMA {
     *(TYPE2 *)((char *)dst_ptr+dma3_dst_offs) = tmp3;
   }
   template <typename TYPE1, typename TYPE2, bool DO_SYNC, bool LAST_XFER>
-    __device__ __forceinline__ void perform_four_xfers(void *src_ptr, void *dst_ptr) const
+    __device__ __forceinline__ void perform_four_xfers(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     TYPE1 tmp1 = *(TYPE1 *)((char *)src_ptr + (LAST_XFER ? dma1_src_offs : dma1_src_iter_offs));
     TYPE1 tmp2 = *(TYPE1 *)((char *)src_ptr + (LAST_XFER ? dma2_src_offs : dma2_src_iter_offs));
@@ -726,7 +737,7 @@ public:
     }
 public:
   // DMA-thread Data Transfer Functions:
-    __device__ __forceinline__ void execute_dma ( void * src_ptr, void * dst_ptr ) const
+    __device__ __forceinline__ void execute_dma ( void *RESTRICT src_ptr, void *RESTRICT dst_ptr ) const
   {
 
 #ifdef CUDADMA_DEBUG_ON
@@ -875,7 +886,7 @@ public:
 #undef num_compute_threads
 #undef dma_threadIdx_start
 public:
-  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     SEQUENTIAL_EXECUTE(false,BYTES_PER_ELMT,DMA_THREADS);
   }
@@ -934,7 +945,7 @@ public:
     SEQUENTIAL_INIT(BYTES_PER_ELMT,DMA_THREADS);
   }
 public:
-  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     SEQUENTIAL_EXECUTE(true,bytes_per_elmt,num_dma_threads);
   }
@@ -997,7 +1008,7 @@ public:
 #undef num_compute_threads
 #undef dma_threadIdx_start
 public:
-  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     SEQUENTIAL_EXECUTE(false,bytes_per_elmt,num_dma_threads);
   }
@@ -1053,7 +1064,7 @@ public:
     SEQUENTIAL_INIT(BYTES_PER_ELMT,DMA_THREADS);
   }
 public:
-  __device__ __forceinline__ void execute_dma( void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma( void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     SEQUENTIAL_EXECUTE(true,BYTES_PER_ELMT,num_dma_threads);
   }
@@ -1114,7 +1125,7 @@ public:
 #undef num_compute_threads
 #undef dma_threadIdx_start
 public:
-  __device__ __forceinline__ void execute_dma( void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma( void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     SEQUENTIAL_EXECUTE(false,BYTES_PER_ELMT,num_dma_threads);
   }
@@ -1411,7 +1422,7 @@ protected:
 	#undef INIT_LARGE_ELMTS
 protected:
   template<typename BULK_TYPE, int ALIGNMENT>
-  __device__ __forceinline__ void copy_elmt(char * src_ptr, char * dst_ptr, int dma_col_iters) const
+  __device__ __forceinline__ void copy_elmt(char *RESTRICT src_ptr, char *RESTRICT dst_ptr, int dma_col_iters) const
   {
 	for (int j=0; j<dma_col_iters; j++)
 	{
@@ -1426,7 +1437,7 @@ protected:
   } 
 
   template<typename BULK_TYPE, int DMA_COL_ITERS, int ALIGNMENT>
-  __device__ __forceinline__ void copy_elmt(char * src_ptr, char * dst_ptr) const
+  __device__ __forceinline__ void copy_elmt(char *RESTRICT src_ptr, char *RESTRICT dst_ptr) const
   {
 	#pragma unroll
 	for (int j=0; j<DMA_COL_ITERS; j++)
@@ -1442,7 +1453,7 @@ protected:
   } 
 
   template<typename BULK_TYPE>
-  __device__ __forceinline__ void copy_across_elmts(char * src_ptr, char * dst_ptr, int total_lds, int partial_size, int dma_col_iters) const
+  __device__ __forceinline__ void copy_across_elmts(char *RESTRICT src_ptr, char *RESTRICT dst_ptr, int total_lds, int partial_size, int dma_col_iters) const
   {
 	for (int j=0; j<dma_col_iters; j++)
 	{
@@ -1455,7 +1466,7 @@ protected:
 
 
   template<typename BULK_TYPE, int DMA_COL_ITERS>
-  __device__ __forceinline__ void copy_across_elmts(char * src_ptr, char * dst_ptr, int total_lds, int partial_size) const
+  __device__ __forceinline__ void copy_across_elmts(char *RESTRICT src_ptr, char *RESTRICT dst_ptr, int total_lds, int partial_size) const
   {
 	//#pragma unroll
 	for (int j=0; j<DMA_COL_ITERS; j++)
@@ -1570,7 +1581,7 @@ protected:
 protected:
   // Some functions for helping to perform indirect transfers
   template<bool DO_SYNC>
-  __device__ __forceinline__ void do_xfer_across_indirect(void * src_ptr, void * dst_ptr, int total_lds, int xfer_size, int offset_index) const
+  __device__ __forceinline__ void do_xfer_across_indirect(void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int total_lds, int xfer_size, int offset_index) const
   {
 	switch (xfer_size)
 	  {
@@ -1608,7 +1619,7 @@ protected:
   }
 
   template<typename TYPE, bool DO_SYNC>
-  __device__ __forceinline__ void perform_xfer_across_indirect(void * src_ptr, void * dst_ptr, int total_lds, int offset_index) const
+  __device__ __forceinline__ void perform_xfer_across_indirect(void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int total_lds, int offset_index) const
   {
 	switch (total_lds)
 	  {
@@ -1646,14 +1657,14 @@ protected:
   }
 protected:
   template<typename TYPE1, bool DO_SYNC>
-    __device__ __forceinline__ void perform_one_indirect_xfer(void *src_ptr, void *dst_ptr, int offset_index) const
+    __device__ __forceinline__ void perform_one_indirect_xfer(void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int offset_index) const
   {
     TYPE1 tmp1 = *(TYPE1 *)((char *)src_ptr + (GATHER ? offsets[offset_index+dma1_src_offs] : dma1_src_offs));
     if (DO_SYNC) CUDADMA_BASE::wait_for_dma_start();
     *(TYPE1 *)((char *)dst_ptr + (GATHER ? dma1_dst_offs : offsets[offset_index+dma1_dst_offs])) = tmp1;
   }
   template<typename TYPE1, typename TYPE2, bool DO_SYNC>
-    __device__ __forceinline__ void perform_two_indirect_xfers(void *src_ptr, void *dst_ptr, int offset_index) const
+    __device__ __forceinline__ void perform_two_indirect_xfers(void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int offset_index) const
   {
     TYPE1 tmp1 = *(TYPE1 *)((char *)src_ptr + (GATHER ? offsets[offset_index+dma1_src_offs] : dma1_src_offs));
     TYPE2 tmp2 = *(TYPE2 *)((char *)src_ptr + (GATHER ? offsets[offset_index+dma2_src_offs] : dma2_src_offs));
@@ -1662,7 +1673,7 @@ protected:
     *(TYPE2 *)((char *)dst_ptr + (GATHER ? dma2_dst_offs : offsets[offset_index+dma2_dst_offs])) = tmp2;
   }
   template<typename TYPE1, typename TYPE2, bool DO_SYNC>
-    __device__ __forceinline__ void perform_three_indirect_xfers(void *src_ptr, void *dst_ptr, int offset_index) const
+    __device__ __forceinline__ void perform_three_indirect_xfers(void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int offset_index) const
   {
     TYPE1 tmp1 = *(TYPE1 *)((char *)src_ptr + (GATHER ? offsets[offset_index+dma1_src_offs] : dma1_src_offs));
     TYPE1 tmp2 = *(TYPE1 *)((char *)src_ptr + (GATHER ? offsets[offset_index+dma2_src_offs] : dma2_src_offs));
@@ -1673,7 +1684,7 @@ protected:
     *(TYPE2 *)((char *)dst_ptr + (GATHER ? dma3_dst_offs : offsets[offset_index+dma3_dst_offs])) = tmp3;
   }
   template <typename TYPE1, typename TYPE2, bool DO_SYNC, bool LAST_XFER>
-    __device__ __forceinline__ void perform_four_indirect_xfers(void *src_ptr, void *dst_ptr, int offset_index) const
+    __device__ __forceinline__ void perform_four_indirect_xfers(void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int offset_index) const
   {
     TYPE1 tmp1 = *(TYPE1 *)((char *)src_ptr + (LAST_XFER ? (GATHER ? offsets[offset_index+dma1_src_offs] : dma1_src_offs) : 
                                                             (GATHER ? offsets[offset_index+dma1_src_iter_offs] : dma1_src_iter_offs)));
@@ -1695,7 +1706,7 @@ protected:
   }
 protected:
   template<typename BULK_TYPE>
-  __device__ __forceinline__ void copy_across_elmts_indirect(char * src_ptr, char * dst_ptr, int total_lds, int partial_size, int dma_col_iters, int offset_index) const
+  __device__ __forceinline__ void copy_across_elmts_indirect(char *RESTRICT src_ptr, char *RESTRICT dst_ptr, int total_lds, int partial_size, int dma_col_iters, int offset_index) const
   {
 	for (int j=0; j<dma_col_iters; j++)
 	{
@@ -1708,7 +1719,7 @@ protected:
 
 
   template<typename BULK_TYPE, int DMA_COL_ITERS>
-  __device__ __forceinline__ void copy_across_elmts_indirect(char * src_ptr, char * dst_ptr, int total_lds, int partial_size, int offset_index) const
+  __device__ __forceinline__ void copy_across_elmts_indirect(char *RESTRICT src_ptr, char *RESTRICT dst_ptr, int total_lds, int partial_size, int offset_index) const
   {
 	//#pragma unroll
 	for (int j=0; j<DMA_COL_ITERS; j++)
@@ -1969,7 +1980,7 @@ public:
 	}
 
 public:
-  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
 	switch (ALIGNMENT)
 	{
@@ -1997,7 +2008,7 @@ public:
   }
 private:
   template<typename BULK_TYPE, int ELMT_LDS, int DMA_ROW_ITERS_FULL, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_FULL, int DMA_COL_ITERS_SPLIT>
-  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
 #ifdef STRIDED_EXECUTE
 	#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes)
@@ -2154,7 +2165,7 @@ public:
 #undef num_compute_threads
 #undef dma_threadIdx_start
 public:
-  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
 	switch (ALIGNMENT)
 	{
@@ -2182,7 +2193,7 @@ public:
   }
 private:
   template<typename BULK_TYPE, int ELMT_LDS, int DMA_ROW_ITERS_FULL, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_FULL, int DMA_COL_ITERS_SPLIT>
-  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
 	#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes)
 	#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes)
@@ -2240,7 +2251,7 @@ public:
 		initialize_strided<ALIGNMENT>(LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,NUM_ELMTS,THREADS_PER_ELMT,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
 	}
 public:
-	__device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+	__device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
 	{
 		switch (ALIGNMENT)
 		{
@@ -2269,7 +2280,7 @@ public:
 
 private:
 	template<typename BULK_TYPE>
-	__device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+	__device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
 	{
 		#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes, DMA_COL_ITERS_SPLIT)
 		#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes, DMA_COL_ITERS_SPLIT)
@@ -2327,7 +2338,7 @@ public:
 #undef num_compute_threads
 #undef dma_threadIdx_start
 public:
-	__device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+	__device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
 	{
 		switch (ALIGNMENT)
 		{
@@ -2356,7 +2367,7 @@ public:
 
 private:
 	template<typename BULK_TYPE>
-	__device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+	__device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
 	{
 		#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes, DMA_COL_ITERS_SPLIT)
 		#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes, DMA_COL_ITERS_SPLIT)
@@ -2406,7 +2417,7 @@ public:
 		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
 	}
 public:
-	__device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+	__device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
 	{
 		switch (ALIGNMENT)
 		{
@@ -2434,7 +2445,7 @@ public:
 	}
 private:
 	template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
-	__device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+	__device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
 	{
 		#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes)
 		#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes)
@@ -2484,7 +2495,7 @@ public:
 #undef num_compute_threads
 #undef dma_threadIdx_start
 public:
-	__device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+	__device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
 	{
 		switch (ALIGNMENT)
 		{
@@ -2512,7 +2523,7 @@ public:
 	}
 private:
 	template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
-	__device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+	__device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
 	{
 		#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes)
 		#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes)
@@ -2560,7 +2571,7 @@ public:
 		initialize_strided<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
 	}
 public:
-	__device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+	__device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
 	{
 		switch (ALIGNMENT)
 		{
@@ -2588,7 +2599,7 @@ public:
 	}
 private:
 	template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
-	__device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+	__device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
 	{
 		#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes)
 		#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes)
@@ -2636,7 +2647,7 @@ public:
 #undef num_compute_threads
 #undef dma_threadIdx_start
 public:
-	__device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+	__device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
 	{
 		switch (ALIGNMENT)
 		{
@@ -2664,7 +2675,7 @@ public:
 	}
 private:
 	template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
-	__device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+	__device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
 	{
 		#define COPY_ACROSS_ELMTS1 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes)
 		#define COPY_ACROSS_ELMTS2 copy_across_elmts<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, MAX_LDS_OUTSTANDING_PER_THREAD, partial_bytes)
@@ -2864,7 +2875,7 @@ public:
     __device__ cudaDMAIndirect(const int dmaID,
                               const int num_compute_threads,
                               const int dma_threadIdx_start,
-                              const int* offs)
+                              const int *RESTRICT offs)
       : INDIRECT_BASE
     {
       cudaDMAIndirectBase<GATHER>::template initialize_indirect<ALIGNMENT, LDS_PER_ELMT_PER_THREAD, BYTES_PER_ELMT, NUM_ELMTS, THREADS_PER_ELMT, WARPS_PER_ELMT, COL_ITERS_FULL>(CUDADMA_WARP_TID);
@@ -2873,7 +2884,7 @@ public:
 #endif
     }
 public:
-  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     switch (ALIGNMENT)
 	{
@@ -2901,7 +2912,7 @@ public:
   }
 protected:
   template<typename BULK_TYPE, int ELMT_LDS, int DMA_ROW_ITERS_FULL, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_FULL, int DMA_COL_ITERS_SPLIT>
-  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
 #ifdef INDIRECT_EXECUTE 
 	#define COPY_ACROSS_ELMTS1 cudaDMAIndirectBase<GATHER>::template \
@@ -3064,7 +3075,7 @@ public:
 #define dmaID  0
 #define num_compute_threads  0
 #define dma_threadIdx_start  0
-    __device__ cudaDMAIndirect(const int* offs)
+    __device__ cudaDMAIndirect(const int *RESTRICT offs)
       : INDIRECT_BASE
     {
       cudaDMAIndirectBase<GATHER>::template initialize_indirect<ALIGNMENT, LDS_PER_ELMT_PER_THREAD, BYTES_PER_ELMT, NUM_ELMTS, THREADS_PER_ELMT, WARPS_PER_ELMT, COL_ITERS_FULL>(CUDADMA_WARP_TID);
@@ -3076,7 +3087,7 @@ public:
 #undef num_compute_threads
 #undef dma_threadIdx_start
 public:
-  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     switch (ALIGNMENT)
 	{
@@ -3104,7 +3115,7 @@ public:
   }
 protected:
   template<typename BULK_TYPE, int ELMT_LDS, int DMA_ROW_ITERS_FULL, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_FULL, int DMA_COL_ITERS_SPLIT>
-  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
 	#define COPY_ACROSS_ELMTS1 cudaDMAIndirectBase<GATHER>::template \
           copy_across_elmts_indirect<BULK_TYPE,DMA_COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, this->dma_split_partial_elmts, this->partial_bytes, 0)
@@ -3136,7 +3147,7 @@ public:
                               const int DMA_THREADS,
                               const int num_compute_threads,
                               const int dma_threadIdx_start,
-                              const int *offs,
+                              const int *RESTRICT offs,
                               const int BYTES_PER_ELMT,
                               const int NUM_ELMTS)
       : INDIRECT_BASE,
@@ -3152,7 +3163,7 @@ public:
 #endif
     }
 public:
-  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     switch (ALIGNMENT)
     {
@@ -3180,7 +3191,7 @@ public:
   }
 protected:
   template<typename BULK_TYPE>
-  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     #define COPY_ACROSS_ELMTS1 cudaDMAIndirectBase<GATHER>::template \
       copy_across_elmts_indirect<BULK_TYPE>(src_row_ptr, dst_row_ptr, this->dma_split_partial_elmts, this->partial_bytes, DMA_COL_ITERS_SPLIT, 0)
@@ -3212,7 +3223,7 @@ public:
 #define dmaID  0
 #define num_compute_threads  0
 #define dma_threadIdx_start  0
-    __device__ cudaDMAIndirect(const int *offs,
+    __device__ cudaDMAIndirect(const int *RESTRICT offs,
                               const int BYTES_PER_ELMT,
                               const int NUM_ELMTS)
       : INDIRECT_BASE,
@@ -3232,7 +3243,7 @@ public:
 #undef num_compute_threads
 #undef dma_threadIdx_start
 public:
-  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     switch (ALIGNMENT)
     {
@@ -3260,7 +3271,7 @@ public:
   }
 protected:
   template<typename BULK_TYPE>
-  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     #define COPY_ACROSS_ELMTS1 cudaDMAIndirectBase<GATHER>::template \
       copy_across_elmts_indirect<BULK_TYPE>(src_row_ptr, dst_row_ptr, this->dma_split_partial_elmts, this->partial_bytes, DMA_COL_ITERS_SPLIT, 0)
@@ -3290,7 +3301,7 @@ public:
                               const int DMA_THREADS,
                               const int num_compute_threads,
                               const int dma_threadIdx_start,
-                              const int *offs,
+                              const int *RESTRICT offs,
                               const int NUM_ELMTS)
       : INDIRECT_BASE,
       DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
@@ -3300,7 +3311,7 @@ public:
       cudaDMAIndirectBase<GATHER>::template initialize_indirect<ALIGNMENT,LDS_PER_ELMT_PER_THREAD,BYTES_PER_ELMT,THREADS_PER_ELMT>(NUM_ELMTS,WARPS_PER_ELMT,COL_ITERS_FULL,CUDADMA_WARP_TID);
     }
 public:
-  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     switch (ALIGNMENT)
     {
@@ -3328,7 +3339,7 @@ public:
   }
 protected:
   template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
-  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     #define COPY_ACROSS_ELMTS1 cudaDMAIndirectBase<GATHER>::template \
       copy_across_elmts_indirect<BULK_TYPE>(src_row_ptr, dst_row_ptr, this->dma_split_partial_elmts, this->partial_bytes, DMA_COL_ITERS_SPLIT, 0)
@@ -3358,7 +3369,7 @@ public:
 #define dmaID  0
 #define num_compute_threads  0
 #define dma_threadIdx_start  0
-    __device__ cudaDMAIndirect(const int *offs,
+    __device__ cudaDMAIndirect(const int *RESTRICT offs,
                               const int NUM_ELMTS)
       : INDIRECT_BASE,
       DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
@@ -3372,7 +3383,7 @@ public:
 #undef num_compute_threads
 #undef dma_threadIdx_start
 public:
-  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     switch (ALIGNMENT)
     {
@@ -3400,7 +3411,7 @@ public:
   }
 protected:
   template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
-  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     #define COPY_ACROSS_ELMTS1 cudaDMAIndirectBase<GATHER>::template \
       copy_across_elmts_indirect<BULK_TYPE>(src_row_ptr, dst_row_ptr, this->dma_split_partial_elmts, this->partial_bytes, DMA_COL_ITERS_SPLIT, 0)
@@ -3429,7 +3440,7 @@ public:
     __device__ cudaDMAIndirect(const int dmaID,
                               const int num_compute_threads,
                               const int dma_threadIdx_start,
-                              const int *offs,
+                              const int *RESTRICT offs,
                               const int NUM_ELMTS)
       : INDIRECT_BASE,
       DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
@@ -3439,7 +3450,7 @@ public:
       cudaDMAIndirectBase<GATHER>::template initialize_indirect<ALIGNMENT, LDS_PER_ELMT_PER_THREAD, BYTES_PER_ELMT, THREADS_PER_ELMT>(NUM_ELMTS, WARPS_PER_ELMT, COL_ITERS_FULL, CUDADMA_WARP_TID); 
     }
 public:
-  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     switch (ALIGNMENT)
     {
@@ -3468,7 +3479,7 @@ public:
 
 protected:
   template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
-  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     #define COPY_ACROSS_ELMTS1 cudaDMAIndirectBase<GATHER>::template \
       copy_across_elmts_indirect<BULK_TYPE>(src_row_ptr, dst_row_ptr, this->dma_split_partial_elmts, this->partial_bytes, DMA_COL_ITERS_SPLIT, 0)
@@ -3497,7 +3508,7 @@ public:
 #define dmaID  0
 #define num_compute_threads  0
 #define dma_threadIdx_start  0
-    __device__ cudaDMAIndirect(const int *offs,
+    __device__ cudaDMAIndirect(const int *RESTRICT offs,
                               const int NUM_ELMTS)
       : INDIRECT_BASE,
       DMA_ROW_ITERS_FULL (ROW_ITERS_FULL),
@@ -3510,7 +3521,7 @@ public:
 #undef num_compute_threads
 #undef dma_threadIdx_start
 public:
-  __device__ __forceinline__ void execute_dma(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_dma(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     switch (ALIGNMENT)
     {
@@ -3539,7 +3550,7 @@ public:
 
 protected:
   template<typename BULK_TYPE, int ELMT_LDS, int DMA_COL_ITERS_SPLIT>
-  __device__ __forceinline__ void execute_internal(void * src_ptr, void * dst_ptr) const
+  __device__ __forceinline__ void execute_internal(void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     #define COPY_ACROSS_ELMTS1 cudaDMAIndirectBase<GATHER>::template \
       copy_across_elmts_indirect<BULK_TYPE>(src_row_ptr, dst_row_ptr, this->dma_split_partial_elmts, this->partial_bytes, DMA_COL_ITERS_SPLIT, 0)
@@ -3825,17 +3836,17 @@ public:
 #endif
 	}
 public:
-  __device__ __forceinline__ void execute_dma(void * src_origin, void * dst_origin) const
+  __device__ __forceinline__ void execute_dma(void *RESTRICT src_origin, void *RESTRICT dst_origin) const
   {
     execute_internal<true>(src_origin, dst_origin);
   }
-  __device__ __forceinline__ void execute_dma_no_sync(void * src_origin, void * dst_origin) const
+  __device__ __forceinline__ void execute_dma_no_sync(void *RESTRICT src_origin, void *RESTRICT dst_origin) const
   {
     execute_internal<false>(src_origin, dst_origin);
   }
 protected:
   template<bool DO_SYNC>
-  __device__ __forceinline__ void execute_internal(void * src_origin, void * dst_origin) const
+  __device__ __forceinline__ void execute_internal(void *RESTRICT src_origin, void *RESTRICT dst_origin) const
   {
 	// First check if this is the optimized case
 	if (optimized)
@@ -3911,7 +3922,7 @@ protected:
   }
 private: // Helper methods
   template<int MAX_ROW>
-  __device__ __forceinline__ void load_rows(int &row_id, char *src_row_ptr, char *dst_row_ptr) const
+  __device__ __forceinline__ void load_rows(int &row_id, char *RESTRICT src_row_ptr, char *RESTRICT dst_row_ptr) const
   {
 	char * src_temp = src_row_ptr;
 	char * dst_temp = dst_row_ptr;
@@ -3994,7 +4005,7 @@ private: // Helper methods
 	    }
   }
   template<bool DO_SYNC>
-  __device__ __forceinline__ void load_rows_opt(char *src_row_ptr, char *dst_row_ptr) const
+  __device__ __forceinline__ void load_rows_opt(char *RESTRICT src_row_ptr, char *RESTRICT dst_row_ptr) const
   {
 	CUDADMA_BASE::template do_xfer<DO_SYNC,ALIGNMENT> (src_row_ptr,dst_row_ptr,
 				(thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ?
@@ -4002,7 +4013,7 @@ private: // Helper methods
 				(thread_bytes ? MAX_BYTES_OUTSTANDING_PER_THREAD : 0));
   }
   template<int XFER_SIZE>
-  __device__ __forceinline__ void load_sides(char * src_side_ptr, char * dst_side_ptr) const
+  __device__ __forceinline__ void load_sides(char *RESTRICT src_side_ptr, char *RESTRICT dst_side_ptr) const
   {
 	switch (XFER_SIZE)
 	  {
@@ -4047,7 +4058,7 @@ private: // Helper methods
 	  }	
   }
   template<bool DO_SYNC, int XFER_SIZE>
-  __device__ __forceinline__ void load_sides_opt(char * src_side_ptr, char * dst_side_ptr) const
+  __device__ __forceinline__ void load_sides_opt(char *RESTRICT src_side_ptr, char *RESTRICT dst_side_ptr) const
   {
 	switch (XFER_SIZE)
 	  {
@@ -4187,6 +4198,7 @@ class cudaDMACustom : public CUDADMA_BASE {
 #undef MAX_LDS_OUTSTANDING_PER_THREAD
 #undef CUDADMA_DMA_TID
 #undef WARP_SIZE
+#undef RESTRICT
 
 // EOF
 

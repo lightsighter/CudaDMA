@@ -530,12 +530,12 @@ simple_scatter_four(float *odata, int *offsets, int buffer_size)
   extern __shared__ float buffer[];
 
   cudaDMAIndirect<false,false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
-    dma0(offsets);
+    dma0;
 
   initialize_buffer(buffer, buffer_size);
   __syncthreads();
   float *base_ptr = &(odata[ALIGN_OFFSET]);
-  dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+  dma0.execute_dma(offsets, &(buffer[ALIGN_OFFSET]), base_ptr);
 }
 
 template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int DMA_THREADS>
@@ -545,12 +545,12 @@ simple_scatter_three(float *odata, int *offsets, int buffer_size, int num_elmts)
   extern __shared__ float buffer[];
 
   cudaDMAIndirect<false,false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
-    dma0(offsets, num_elmts);
+    dma0(num_elmts);
 
   initialize_buffer(buffer, buffer_size);
   __syncthreads();
   float *base_ptr = &(odata[ALIGN_OFFSET]);
-  dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+  dma0.execute_dma(offsets, &(buffer[ALIGN_OFFSET]), base_ptr);
 }
 
 template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT>
@@ -560,12 +560,12 @@ simple_scatter_two(float *odata, int *offsets, int buffer_size, int num_elmts)
   extern __shared__ float buffer[];
 
   cudaDMAIndirect<false,false,ALIGNMENT,BYTES_PER_ELMT>
-    dma0(offsets, num_elmts);
+    dma0(num_elmts);
 
   initialize_buffer(buffer, buffer_size);
   __syncthreads();
   float *base_ptr = &(odata[ALIGN_OFFSET]);
-  dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+  dma0.execute_dma(offsets, &(buffer[ALIGN_OFFSET]), base_ptr);
 }
 
 template<int ALIGNMENT, int ALIGN_OFFSET>
@@ -575,12 +575,12 @@ simple_scatter_one(float *odata, int *offsets, int buffer_size, int bytes_per_el
   extern __shared__ float buffer[];
 
   cudaDMAIndirect<false,false,ALIGNMENT>
-    dma0(offsets,bytes_per_elmt,num_elmts);
+    dma0(bytes_per_elmt,num_elmts);
 
   initialize_buffer(buffer, buffer_size);
   __syncthreads();
   float *base_ptr = &(odata[ALIGN_OFFSET]);
-  dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+  dma0.execute_dma(offsets,&(buffer[ALIGN_OFFSET]), base_ptr);
 }
 
 template<bool SPECIALIZED, int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_ELMT, int NUM_ELMTS, int DMA_THREADS>
@@ -702,7 +702,7 @@ __host__ bool run_gather_experiment(int *h_offsets, int max_index/*floats*/, int
   bool pass = true;
   for (int i=0; i<NUM_ELMTS && pass; i++)
   {
-    int in_index = ALIGN_OFFSET+(h_offsets[i]/sizeof(float));
+    int in_index = ALIGN_OFFSET+(h_offsets[i]*BYTES_PER_ELMT/sizeof(float));
     int out_index = ALIGN_OFFSET+i*BYTES_PER_ELMT/sizeof(float);
 #if 0
     printf("elment %d result: ",i);
@@ -862,7 +862,7 @@ __host__ bool run_scatter_experiment(int *h_offsets, int max_index/*floats*/, in
   for (int i = 0; i<NUM_ELMTS && pass; i++)
   {
     float out_value = ALIGN_OFFSET+i*BYTES_PER_ELMT/sizeof(float);
-    int out_index = ALIGN_OFFSET+(h_offsets[i]/sizeof(float));
+    int out_index = ALIGN_OFFSET+(h_offsets[i]*BYTES_PER_ELMT/sizeof(float));
     for (int j = 0; j<(BYTES_PER_ELMT/sizeof(float)); j++)
     {
       if (h_odata[out_index] != (out_value+float(j)))
@@ -925,7 +925,7 @@ int main()
         return true;
       }
       tries++;
-      int off = (rand() % (262144));
+      int off = (rand() % (16384));
       off *= PARAM_ALIGNMENT;
       // Check if the offset is good
       bool good = true;
@@ -943,8 +943,8 @@ int main()
       {
         offsets[cnt++] = off;
         printf("%d ", off);
-        if ((off/int(sizeof(float))) > max_offset)
-          max_offset = off/int(sizeof(float));
+        if ((off*PARAM_ELMT_SIZE/int(sizeof(float))) > max_offset)
+          max_offset = off*PARAM_ELMT_SIZE/int(sizeof(float));
         off_set.insert(off);
       }
     }

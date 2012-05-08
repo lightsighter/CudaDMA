@@ -1498,6 +1498,7 @@ class cudaDMAIndirectBase : public cudaDMAStridedBase
 {
 protected:
   const int init_elmt_id;
+  const int elmt_byte_size;
 protected: // Protected so nobody can actually make one of these
   __device__ cudaDMAIndirectBase (const int dmaID,
                                   const int num_dma_threads,
@@ -1527,7 +1528,8 @@ protected: // Protected so nobody can actually make one of these
                                   const bool active,
                                   const bool partial,
                                   const int split_partial_elmts,
-                                  const int start_elmt_id)
+                                  const int start_elmt_id,
+                                  const int elmt_size)
         : cudaDMAStridedBase(dmaID,
                         num_dma_threads,
 			num_compute_threads,
@@ -1556,7 +1558,8 @@ protected: // Protected so nobody can actually make one of these
                         active,
                         partial,
                         split_partial_elmts),
-        init_elmt_id (start_elmt_id) { }
+        init_elmt_id (start_elmt_id),
+        elmt_byte_size (elmt_size) { }
 protected:
   template<int ALIGNMENT, int LDS_PER_ELMT_PER_THREAD, int BYTES_PER_ELMT, int NUM_ELMTS, int THREADS_PER_ELMT, int WARPS_PER_ELMT, int COL_ITERS_FULL>
   __device__ __forceinline__ void initialize_indirect(int warp_tid)
@@ -1656,7 +1659,7 @@ protected:
   template<typename TYPE1, bool DO_SYNC>
     __device__ __forceinline__ void perform_one_indirect_xfer(const int *RESTRICT index_ptr, const void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int offset_index) const
   {
-    int index_offset1 = index_ptr[offset_index + (GATHER ? dma1_src_offs : dma1_dst_offs)];
+    int index_offset1 = elmt_byte_size * index_ptr[offset_index + (GATHER ? dma1_src_offs : dma1_dst_offs)];
     TYPE1 tmp1 = *(const TYPE1 *)((const char *)src_ptr + (GATHER ? index_offset1 : dma1_src_offs));
     if (DO_SYNC) CUDADMA_BASE::wait_for_dma_start();
     *(TYPE1 *)((char *)dst_ptr + (GATHER ? dma1_dst_offs : index_offset1)) = tmp1;
@@ -1664,8 +1667,8 @@ protected:
   template<typename TYPE1, typename TYPE2, bool DO_SYNC>
     __device__ __forceinline__ void perform_two_indirect_xfers(const int *RESTRICT index_ptr, const void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int offset_index) const
   {
-    int index_offset1 = index_ptr[offset_index + (GATHER ? dma1_src_offs : dma1_dst_offs)];
-    int index_offset2 = index_ptr[offset_index + (GATHER ? dma2_src_offs : dma2_dst_offs)];
+    int index_offset1 = elmt_byte_size * index_ptr[offset_index + (GATHER ? dma1_src_offs : dma1_dst_offs)];
+    int index_offset2 = elmt_byte_size * index_ptr[offset_index + (GATHER ? dma2_src_offs : dma2_dst_offs)];
     TYPE1 tmp1 = *(const TYPE1 *)((const char *)src_ptr + (GATHER ? index_offset1 : dma1_src_offs));
     TYPE2 tmp2 = *(const TYPE2 *)((const char *)src_ptr + (GATHER ? index_offset2 : dma2_src_offs));
     if (DO_SYNC) CUDADMA_BASE::wait_for_dma_start();
@@ -1675,9 +1678,9 @@ protected:
   template<typename TYPE1, typename TYPE2, bool DO_SYNC>
     __device__ __forceinline__ void perform_three_indirect_xfers(const int *RESTRICT index_ptr, const void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int offset_index) const
   {
-    int index_offset1 = index_ptr[offset_index + (GATHER ? dma1_src_offs : dma1_dst_offs)];
-    int index_offset2 = index_ptr[offset_index + (GATHER ? dma2_src_offs : dma2_dst_offs)];
-    int index_offset3 = index_ptr[offset_index + (GATHER ? dma3_src_offs : dma3_dst_offs)];
+    int index_offset1 = elmt_byte_size * index_ptr[offset_index + (GATHER ? dma1_src_offs : dma1_dst_offs)];
+    int index_offset2 = elmt_byte_size * index_ptr[offset_index + (GATHER ? dma2_src_offs : dma2_dst_offs)];
+    int index_offset3 = elmt_byte_size * index_ptr[offset_index + (GATHER ? dma3_src_offs : dma3_dst_offs)];
     TYPE1 tmp1 = *(const TYPE1 *)((const char *)src_ptr + (GATHER ? index_offset1 : dma1_src_offs));
     TYPE1 tmp2 = *(const TYPE1 *)((const char *)src_ptr + (GATHER ? index_offset2 : dma2_src_offs));
     TYPE2 tmp3 = *(const TYPE2 *)((const char *)src_ptr + (GATHER ? index_offset3 : dma3_src_offs));
@@ -1689,18 +1692,18 @@ protected:
   template <typename TYPE1, typename TYPE2, bool DO_SYNC, bool LAST_XFER>
     __device__ __forceinline__ void perform_four_indirect_xfers(const int *RESTRICT index_ptr, const void *RESTRICT src_ptr, void *RESTRICT dst_ptr, int offset_index) const
   {
-    int index_offset1 = index_ptr[offset_index + (LAST_XFER ?
-                                                  (GATHER ? dma1_src_offs : dma1_dst_offs) :
-                                                  (GATHER ? dma1_src_iter_offs : dma1_dst_iter_offs))];
-    int index_offset2 = index_ptr[offset_index + (LAST_XFER ?
-                                                  (GATHER ? dma2_src_offs : dma2_dst_offs) :
-                                                  (GATHER ? dma2_src_iter_offs : dma2_dst_iter_offs))];
-    int index_offset3 = index_ptr[offset_index + (LAST_XFER ? 
-                                                  (GATHER ? dma3_src_offs : dma3_dst_offs) :
-                                                  (GATHER ? dma3_src_iter_offs : dma3_dst_iter_offs))];
-    int index_offset4 = index_ptr[offset_index + (LAST_XFER ?
-                                                  (GATHER ? dma4_src_offs : dma4_dst_offs) :
-                                                  (GATHER ? dma4_src_iter_offs : dma4_dst_iter_offs))];
+    int index_offset1 = elmt_byte_size * index_ptr[offset_index + (LAST_XFER ?
+                                                                  (GATHER ? dma1_src_offs : dma1_dst_offs) :
+                                                                  (GATHER ? dma1_src_iter_offs : dma1_dst_iter_offs))];
+    int index_offset2 = elmt_byte_size * index_ptr[offset_index + (LAST_XFER ?
+                                                                  (GATHER ? dma2_src_offs : dma2_dst_offs) :
+                                                                  (GATHER ? dma2_src_iter_offs : dma2_dst_iter_offs))];
+    int index_offset3 = elmt_byte_size * index_ptr[offset_index + (LAST_XFER ? 
+                                                                  (GATHER ? dma3_src_offs : dma3_dst_offs) :
+                                                                  (GATHER ? dma3_src_iter_offs : dma3_dst_iter_offs))];
+    int index_offset4 = elmt_byte_size * index_ptr[offset_index + (LAST_XFER ?
+                                                                  (GATHER ? dma4_src_offs : dma4_dst_offs) :
+                                                                  (GATHER ? dma4_src_iter_offs : dma4_dst_iter_offs))];
                         
     TYPE1 tmp1 = *(const TYPE1 *)((const char *)src_ptr + (LAST_XFER ? (GATHER ? index_offset1 : dma1_src_offs) : 
 							               (GATHER ? index_offset1 : dma1_src_iter_offs)));
@@ -2755,7 +2758,8 @@ private:
 		(int(ELMT_ID) < ELMT_PER_STEP),													\
 		(NUM_ELMTS==ELMT_PER_STEP ? int(ELMT_ID) < ELMT_PER_STEP : int(ELMT_ID) < (NUM_ELMTS%ELMT_PER_STEP)),				\
 		(PARTIAL_ELMTS),                                                                                                                \
-                (SPLIT_ELMT ? ELMT_ID_SPLIT : ELMT_ID))
+                (SPLIT_ELMT ? ELMT_ID_SPLIT : ELMT_ID),                                                                                         \
+                (BYTES_PER_ELMT))
 
 #define INDIRECT_EXECUTE(DO_SYNC)                                                                                                               \
         if (ELMT_LDS == 1)                                                                                                                      \
@@ -2825,9 +2829,9 @@ private:
 		if (DMA_ROW_ITERS_FULL==0)                                                                                                      \
 		{                                                                                                                               \
                         if (GATHER)                                                                                                             \
-                          src_row_ptr += index_ptr[this->init_elmt_id];                                                                         \
+                          src_row_ptr += (this->elmt_byte_size * index_ptr[this->init_elmt_id]);                                                \
                         else                                                                                                                    \
-                          dst_row_ptr += index_ptr[this->init_elmt_id];                                                                         \
+                          dst_row_ptr += (this->elmt_byte_size * index_ptr[this->init_elmt_id]);                                                \
 			if (DMA_COL_ITERS_FULL == 0)                                                                                            \
 			{                                                                                                                       \
 				int opt_xfer = (this->thread_bytes%MAX_BYTES_OUTSTANDING_PER_THREAD) ?                                          \
@@ -2862,9 +2866,9 @@ private:
 				for (int i=0; i<DMA_ROW_ITERS_FULL; i++)                                                                        \
 				{                                                                                                               \
                                         if (GATHER)                                                                                             \
-                                          src_row_ptr = ((const char*)src_ptr) + index_ptr[offset_index] + (GATHER ? 0 : this->dma_src_offset); \
+                                          src_row_ptr = ((const char*)src_ptr) + (this->elmt_byte_size * index_ptr[offset_index]) + (GATHER ? 0 : this->dma_src_offset); \
                                         else                                                                                                    \
-                                          dst_row_ptr = ((char*)dst_ptr) + index_ptr[offset_index] + (GATHER ? this->dma_dst_offset : 0);       \
+                                          dst_row_ptr = ((char*)dst_ptr) + (this->elmt_byte_size * index_ptr[offset_index]) + (GATHER ? this->dma_dst_offset : 0); \
                                         COPY_ELMT_FN;                                                                                           \
 					src_row_ptr += (GATHER ? 0 : this->dma_src_row_iter_inc);                                               \
 					dst_row_ptr += (GATHER ? this->dma_dst_row_iter_inc : 0);                                               \
@@ -2874,9 +2878,9 @@ private:
 			if (this->warp_partial)                                                                                                 \
 			{                                                                                                                       \
                                 if (GATHER)                                                                                                     \
-                                  src_row_ptr = ((const char*)src_ptr) + index_ptr[offset_index] + (GATHER ? 0 : this->dma_src_offset);         \
+                                  src_row_ptr = ((const char*)src_ptr) + (this->elmt_byte_size * index_ptr[offset_index]) + (GATHER ? 0 : this->dma_src_offset); \
                                 else                                                                                                            \
-                                  dst_row_ptr = ((char*)dst_ptr) + index_ptr[offset_index] + (GATHER ? this->dma_dst_offset : 0);               \
+                                  dst_row_ptr = ((char*)dst_ptr) + (this->elmt_byte_size * index_ptr[offset_index]) + (GATHER ? this->dma_dst_offset : 0); \
                                 COPY_ELMT_FN;                                                                                                   \
 			}                                                                                                                       \
 		}                                                                                                                               \
@@ -3020,9 +3024,9 @@ protected:
 		{
                         // Update the pointer with the correct offset
                         if (GATHER)
-                          src_row_ptr += index_ptr[this->init_elmt_id];
+                          src_row_ptr += (this->elmt_byte_size * index_ptr[this->init_elmt_id]);
                         else
-                          dst_row_ptr += index_ptr[this->init_elmt_id];
+                          dst_row_ptr += (this->elmt_byte_size * index_ptr[this->init_elmt_id]);
 			// check to see if there are column iterations to perform, if not might be able to do the optimized case
 			if (DMA_COL_ITERS_FULL == 0)
 			{
@@ -3060,9 +3064,9 @@ protected:
 				for (int i=0; i<DMA_ROW_ITERS_FULL; i++)
 				{
                                         if (GATHER)
-                                          src_row_ptr = ((const char*)src_ptr) + index_ptr[offset_index] + (GATHER ? 0 : this->dma_src_offset);
+                                          src_row_ptr = ((const char*)src_ptr) + (this->elmt_byte_size * index_ptr[offset_index]) + (GATHER ? 0 : this->dma_src_offset);
                                         else
-                                          dst_row_ptr = ((char*)dst_ptr) + index_ptr[offset_index] + (GATHER ? this->dma_dst_offset : 0);
+                                          dst_row_ptr = ((char*)dst_ptr) + (this->elmt_byte_size * index_ptr[offset_index]) + (GATHER ? this->dma_dst_offset : 0);
                                         cudaDMAStridedBase::template copy_elmt<BULK_TYPE, DMA_COL_ITERS_FULL, ALIGNMENT>(src_row_ptr,dst_row_ptr);
 					src_row_ptr += (GATHER ? 0 : this->dma_src_row_iter_inc);
 					dst_row_ptr += (GATHER ? this->dma_dst_row_iter_inc : 0);
@@ -3072,9 +3076,9 @@ protected:
 			if (this->warp_partial)
 			{
                                 if (GATHER)
-                                  src_row_ptr = ((const char*)src_ptr) + index_ptr[offset_index] + (GATHER ? 0 : this->dma_src_offset);
+                                  src_row_ptr = ((const char*)src_ptr) + (this->elmt_byte_size * index_ptr[offset_index]) + (GATHER ? 0 : this->dma_src_offset);
                                 else
-                                  dst_row_ptr = ((char*)dst_ptr) + index_ptr[offset_index] + (GATHER ? this->dma_dst_offset : 0);
+                                  dst_row_ptr = ((char*)dst_ptr) + (this->elmt_byte_size * index_ptr[offset_index]) + (GATHER ? this->dma_dst_offset : 0);
                                 cudaDMAStridedBase::template copy_elmt<BULK_TYPE, DMA_COL_ITERS_FULL, ALIGNMENT>(src_row_ptr,dst_row_ptr);
 			}
 		}

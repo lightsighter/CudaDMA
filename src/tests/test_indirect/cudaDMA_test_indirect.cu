@@ -65,8 +65,7 @@ dma_gather_four( float *idata, float *odata, int *offsets, int buffer_size, int 
 
   cudaDMAIndirect<true,true,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
     dma0 (1, num_compute_threads,
-          num_compute_threads,
-          offsets);
+          num_compute_threads);
 
   if (dma0.owns_this_thread())
   {
@@ -75,7 +74,7 @@ dma_gather_four( float *idata, float *odata, int *offsets, int buffer_size, int 
     dma0.wait_for_dma_start();
     dma0.finish_async_dma();
 #else
-    dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+    dma0.execute_dma(offsets, base_ptr, &(buffer[ALIGN_OFFSET]));
 #endif
   }
   else
@@ -117,7 +116,6 @@ dma_gather_three(float *idata, float *odata, int *offsets, int buffer_size, int 
   cudaDMAIndirect<true,true,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
     dma0 (1, num_compute_threads,
           num_compute_threads,
-          offsets,
           num_elmts);
 
   if (dma0.owns_this_thread())
@@ -127,7 +125,7 @@ dma_gather_three(float *idata, float *odata, int *offsets, int buffer_size, int 
     dma0.wait_for_dma_start();
     dma0.finish_async_dma();
 #else
-    dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+    dma0.execute_dma(offsets, base_ptr, &(buffer[ALIGN_OFFSET]));
 #endif
   }
   else
@@ -170,7 +168,6 @@ dma_gather_two(float *idata, float *odata, int *offsets, int buffer_size, int nu
     dma0 (1, num_dma_threads,
           num_compute_threads,
           num_compute_threads,
-          offsets,
           num_elmts);
 
   if (dma0.owns_this_thread())
@@ -180,7 +177,7 @@ dma_gather_two(float *idata, float *odata, int *offsets, int buffer_size, int nu
     dma0.wait_for_dma_start();
     dma0.finish_async_dma();
 #else
-    dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+    dma0.execute_dma(offsets, base_ptr, &(buffer[ALIGN_OFFSET]));
 #endif
   }
   else
@@ -223,7 +220,6 @@ dma_gather_one(float *idata, float *odata, int *offsets, int buffer_size, int nu
     dma0 (1, num_dma_threads,
           num_compute_threads,
           num_compute_threads,
-          offsets,
           bytes_per_elmt,
           num_elmts);
 
@@ -234,7 +230,7 @@ dma_gather_one(float *idata, float *odata, int *offsets, int buffer_size, int nu
     dma0.wait_for_dma_start();
     dma0.finish_async_dma();
 #else
-    dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+    dma0.execute_dma(offsets, base_ptr, &(buffer[ALIGN_OFFSET]));
 #endif
   }
   else
@@ -275,8 +271,7 @@ dma_scatter_four( float *odata, int *offsets, int buffer_size, int num_compute_t
 
   cudaDMAIndirect<false,true,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
     dma0 (1, num_compute_threads,
-            num_compute_threads,
-            offsets);
+            num_compute_threads);
 
   if (dma0.owns_this_thread())
   {
@@ -285,7 +280,7 @@ dma_scatter_four( float *odata, int *offsets, int buffer_size, int num_compute_t
     dma0.wait_for_dma_start();
     dma0.finish_async_dma();
 #else
-    dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+    dma0.execute_dma(offsets, &(buffer[ALIGN_OFFSET]), base_ptr);
 #endif
   }
   else
@@ -313,7 +308,6 @@ dma_scatter_three( float *odata, int *offsets, int buffer_size, int num_compute_
   cudaDMAIndirect<false,true,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
     dma0 (1, num_compute_threads,
             num_compute_threads,
-            offsets,
             NUM_ELMTS);
 
   if (dma0.owns_this_thread())
@@ -323,7 +317,7 @@ dma_scatter_three( float *odata, int *offsets, int buffer_size, int num_compute_
     dma0.wait_for_dma_start();
     dma0.finish_async_dma();
 #else
-    dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+    dma0.execute_dma(offsets, &(buffer[ALIGN_OFFSET]), base_ptr);
 #endif
   }
   else
@@ -352,7 +346,6 @@ dma_scatter_two( float *odata, int *offsets, int buffer_size, int num_compute_th
     dma0 (1, num_dma_threads,
             num_compute_threads,
             num_compute_threads,
-            offsets,
             NUM_ELMTS);
 
   if (dma0.owns_this_thread())
@@ -362,7 +355,7 @@ dma_scatter_two( float *odata, int *offsets, int buffer_size, int num_compute_th
     dma0.wait_for_dma_start();
     dma0.finish_async_dma();
 #else
-    dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+    dma0.execute_dma(offsets, &(buffer[ALIGN_OFFSET]), base_ptr);
 #endif
   }
   else
@@ -391,7 +384,6 @@ dma_scatter_one( float *odata, int *offsets, int buffer_size, int num_compute_th
     dma0 (1, num_dma_threads,
             num_compute_threads,
             num_compute_threads,
-            offsets,
             bytes_per_elmt,
             num_elmts);
 
@@ -402,7 +394,7 @@ dma_scatter_one( float *odata, int *offsets, int buffer_size, int num_compute_th
     dma0.wait_for_dma_start();
     dma0.finish_async_dma();
 #else
-    dma0.execute_dma(&(buffer[ALIGN_OFFSET]), base_ptr);
+    dma0.execute_dma(offsets, &(buffer[ALIGN_OFFSET]), base_ptr);
 #endif
   }
   else
@@ -456,12 +448,12 @@ simple_gather_four(float *idata, float *odata, int *offsets, int buffer_size)
   extern __shared__ float buffer[];
 
   cudaDMAIndirect<true,false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
-    dma0(offsets);
+    dma0;
 
   zero_buffer(buffer, buffer_size);
   __syncthreads();
   float *base_ptr = &(idata[ALIGN_OFFSET]);
-  dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+  dma0.execute_dma(offsets,base_ptr, &(buffer[ALIGN_OFFSET]));
   __syncthreads();
   copy_buffer(buffer, odata, buffer_size);
 }
@@ -473,12 +465,12 @@ simple_gather_three(float *idata, float *odata, int *offsets, int buffer_size, i
   extern __shared__ float buffer[];
 
   cudaDMAIndirect<true,false,ALIGNMENT,BYTES_PER_ELMT,DMA_THREADS>
-    dma0(offsets,num_elmts);
+    dma0(num_elmts);
 
   zero_buffer(buffer,buffer_size);
   __syncthreads();
   float *base_ptr = &(idata[ALIGN_OFFSET]);
-  dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+  dma0.execute_dma(offsets,base_ptr, &(buffer[ALIGN_OFFSET]));
   __syncthreads();
   copy_buffer(buffer, odata, buffer_size);
 }
@@ -490,12 +482,12 @@ simple_gather_two(float *idata, float *odata, int *offsets, int buffer_size, int
   extern __shared__ float buffer[];
 
   cudaDMAIndirect<true,false,ALIGNMENT,BYTES_PER_ELMT>
-    dma0(offsets,num_elmts);
+    dma0(num_elmts);
 
   zero_buffer(buffer,buffer_size);
   __syncthreads();
   float *base_ptr = &(idata[ALIGN_OFFSET]);
-  dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+  dma0.execute_dma(offsets,base_ptr, &(buffer[ALIGN_OFFSET]));
   __syncthreads();
   copy_buffer(buffer, odata, buffer_size);
 }
@@ -507,12 +499,12 @@ simple_gather_one(float *idata, float *odata, int *offsets, int buffer_size, int
   extern __shared__ float buffer[];
 
   cudaDMAIndirect<true,false,ALIGNMENT>
-    dma0(offsets,bytes_per_elmt,num_elmts);
+    dma0(bytes_per_elmt,num_elmts);
 
   zero_buffer(buffer,buffer_size);
   __syncthreads();
   float *base_ptr = &(idata[ALIGN_OFFSET]);
-  dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+  dma0.execute_dma(offsets,base_ptr, &(buffer[ALIGN_OFFSET]));
   __syncthreads();
   copy_buffer(buffer, odata, buffer_size);
 }

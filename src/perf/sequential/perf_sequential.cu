@@ -242,6 +242,7 @@ void performance_test(int device, bool always_false)
   int total_ctas;
   long total_mem;
   {
+    CUDA_SAFE_CALL(cudaSetDevice(device));
     cudaDeviceProp deviceProp;
     CUDA_SAFE_CALL(cudaGetDeviceProperties(&deviceProp,device));
     if(deviceProp.major == 9999 && deviceProp.minor == 9999)

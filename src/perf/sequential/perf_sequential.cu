@@ -383,8 +383,8 @@ int main(int argc, char **argv)
   if (PARAM_SPECIALIZED)
   {
     fprintf(stdout,"\tBUFFERING - %s\n", PARAM_BUFFERING);  
-    fprintf(stdout,"\tDMA WARPS - %d\n", PARAM_DMA_WARPS);
   }
+  fprintf(stdout,"\tDMA WARPS - %d\n", PARAM_DMA_WARPS);
   fprintf(stdout,"\tCTAs/SM - %d\n",PARAM_CTA_PER_SM);
   fprintf(stdout,"\tLOOP ITERATIONS - %d\n",PARAM_LOOP_ITERS);
 

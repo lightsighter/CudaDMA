@@ -184,17 +184,17 @@ public:
     {
       case 4:
       	{
-          execute_internal<float>(src_ptr,dst_ptr);
+          execute_internal<float,LDS_PER_ELMT_PER_THREAD>(src_ptr,dst_ptr);
 	  break;
 	}
     case 8:
       	{
-          execute_internal<float2>(src_ptr,dst_ptr);
+          execute_internal<float2,LDS_PER_ELMT_PER_THREAD>(src_ptr,dst_ptr);
 	  break;
 	}
     case 16:
       	{
-          execute_internal<float4>(src_ptr,dst_ptr);
+          execute_internal<float4,LDS_PER_ELMT_PER_THREAD>(src_ptr,dst_ptr);
 	  break;
 	}
 #ifdef CUDADMA_DEBUG_ON
@@ -206,10 +206,10 @@ public:
     }
   }
 
-  template<typename BULK_TYPE, int ELMT_LDS, int DMA_STEP_ITERS_FULL, int DMA_STEP_ITERS_SPLIT, int DMA_ROW_ITERS_FULL, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_FULL, int DMA_COL_ITERS_SPLIT>
+  template<typename BULK_TYPE, int ELMT_LDS, int DMA_STEP_ITERS_SPLIT, int DMA_STEP_ITERS_FULL>
   __device__ __forceinline__ void execute_internal(const void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
-    if (ELMT_LDS == 1)
+    if (ELMT_LDS == 1) // Split warp over multiple elements
     {
       // Loop over elements only
       const char * src_row_ptr = ((const char*)src_ptr) + dma_src_offset;
@@ -219,14 +219,14 @@ public:
       	// Single step
 	if (all_threads_active) // The optimized case
 	{
-	  do_strided_across<DO_SYNC>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, dma_src_elmt_stride, dma_dst_elmt_stride, partial_bytes);
+	  do_strided_across<DO_SYNC>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes, dma_src_elmt_stride, dma_dst_elmt_stride);
 	}
 	else
 	{
 	  if (DO_SYNC)
 	    CUDADMA_BASE::wait_for_dma_start();
 	  if (dma_split_partial_elmts > 0)
-	    do_strided_across<false>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, dma_src_elmt_stride, dma_dst_elmt_stride, partial_bytes);
+	    do_strided_across<false>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, partial_bytes, dma_src_elmt_stride, dma_dst_elmt_stride);
 	}
       }
       else
@@ -242,11 +242,11 @@ public:
 	}
 	if (dma_split_partial_elmts > 0)
 	{
-	  do_xfer_across<false>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, dma_src_elmt_stride, dma_ds_elmt_stride, partial_bytes)
+	  do_strided_across<false>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, dma_src_elmt_stride, dma_ds_elmt_stride, partial_bytes)
 	}
       }
     }
-    else if (ELMT_LDS <= MAX_LDS_PER_THREAD)
+    else if (ELMT_LDS <= MAX_LDS_PER_THREAD) // 1 warp per element, warp may handle multiple elements
     {
       const char * src_row_ptr = ((const char*)src_ptr) + dma_src_offset;
       char       * dst_row_ptr = ((char*)dst_ptr)       + dma_dst_offset;
@@ -254,21 +254,65 @@ public:
       if (DMA_STEP_ITERS_SPLIT == 0)
       {
 	// Single step
-	if (DO_SYNC)
-	  CUDADMA_BASE::wait_for_dma_start();
-	perform_strided<BULK_TYPE,DO_SYNC>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, dma_lds_per_elmt, dma_src_elmt_stride, dma_dst_elmt_stride, dma_ld_stride); 		
+        // No left over bytes at the end of an element
+        if (all_threads_active)
+        {
+          do_strided<BULK_TYPE,DO_SYNC,COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, 
+                                                        dma_src_elmt_stride, dma_dst_elmt_stride, dma_ld_stride);
+        }
+        else
+        {
+          // We bytes left-over on the end of the element 
+          if (DO_SYNC)
+            CUDADMA_BASE::wait_for_dma_start();
+          do_strided<BULK_TYPE,false,COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, 
+                                                      dma_src_elmt_stride, dma_dst_elmt_stride, dma_ld_stride);
+          do_strided_across<false>(src_row_ptr+(COL_ITERS_SPLIT*dma_ld_stride), dst_row_ptr+(COL_ITERS_SPLIT*dma_ld_stride), 
+                                    dma_split_partial_elmts, dma_src_elmt_stride, dma_dst_elmt_stride, partial_bytes);
+        }
       }
       else
       {
-      	// Iterate over the steps 
-	for (int i = 0; i< DMA_STEP_ITERS_SPLIT; i++)
-	{
-	  perform_strided<BULK_TYPE,DO_SYNC>(src_row_ptr, dst_row_ptr, DMA_ROW_ITERS_SPLIT, dma_lds_per_elmt, dma_src_elmt_stride, dma_dst_elmt_stride, dma_ld_stride);
-	}
+        if (DO_SYNC)
+          CUDADMA_BASE::wait_for_dma_start();
+        // Iterate over the steps
+        if (all_threads_active)
+        {
+          for (int i = 0; i < DMA_STEP_ITERS_SPLIT; i++)
+          {
+            do_strided<BULK_TYPE,false,COL_ITERS_SPLIT,ROW_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, 
+                                                                        dma_src_elmt_stride, dma_dst_elmt_stride, dma_ld_stride);
+            // Update pointers
+          }
+          if (dma_split_partial_elmts > 0)
+            do_strided<BULK_TYPE,false,COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts, 
+                                                        dma_src_elmt_stride, dma_dst_elmt_stride, dma_ld_stride);
+        }
+        else
+        {
+          // We have leftover bytes at the end of each element 
+          for (int i = 0; i < DMA_STEP_ITERS_SPLIT; i++)
+          {
+            do_strided<BULK_TYPE,false,COL_ITERS_SPLIT,ROW_ITERS_SPLIT>(src_row_ptr, dst_row_ptr,
+                                                                        dma_src_elmt_stride, dma_dst_elmt_stride, dma_ld_stride);
+            do_strided_across<false>(src_row_ptr+(COL_ITERS_SPLIT*dma_ld_stride), dst_row_ptr+(COL_ITERS_SPLIT*dma_ld_stride),
+                                      ROW_ITERS_SPLIT, dma_src_elmt_stride, dma_dst_elmt_stride, partial_bytes);
+            // Update pointers
+          }
+          if (dma_split_partial_elmts > 0)
+          {
+            do_strided<BULK_TYPE,false,COL_ITERS_SPLIT>(src_row_ptr, dst_row_ptr, dma_split_partial_elmts,
+                                                        dma_src_elmt_stride, dma_dst_elmt_stride, dma_ld_stride);
+            do_strided_across<false>(src_row_ptr+(COL_ITERS_SPLIT*dma_ld_stride),dst_row_ptr+(COL_ITERS_SPLIT*dma_ld_stride),
+                                      dma_split_partial_elmts, dma_src_elmt_stride, dma_dst_elmt_stride, partial_bytes);
+          }
+        }
       }
     }
-    else
+    else // multiple warps per element
     {
+      const char * src_row_ptr = ((const char*)src_ptr) + dma_src_offset;
+      char       * dst_row_ptr = ((char*)dst_ptr)       + dma_dst_offset;
       // Loop over a multiple loads for a single element per step
       if (DMA_STEP_ITERS_FULL == 0)
       {
@@ -286,9 +330,10 @@ public:
   }
 
   template<bool DO_SYNC>
-  __device__ __forceinline__ void do_strided_across(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, const unsigned num_elmts, const int src_stride, const int dst_stride, const unsigned xfer_size) const
+  __device__ __forceinline__ void do_strided_across(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, const int total_lds, const int xfer_size,
+                                                    const int src_stride, const int dst_stride) const
   {
-    switch (partial_bytes)
+    switch (xfer_size)
     {
       case 0:
         {
@@ -318,23 +363,28 @@ public:
 #ifdef CUDADMA_DEBUG_ON
       default:
         printf("Invalid xfer size (%d) for xfer across.\n",xfer_size);
+        assert(false);
         break;
 #endif
     }
   }
 
   template<typename BULK_TYPE, bool DO_SYNC>
-  __device__ __forceinline__ void perform_strided_across(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, const unsigned num_elmts, const int src_stride, const int dst_stride) const
+  __device__ __forceinline__ void perform_strided_across(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, const int total_lds, 
+                                                         const int src_stride, const int dst_stride) const
   {
     BULK_TYPE temp[BYTES_PER_THREAD/sizeof(BULK_TYPE)];
-    for (unsigned idx = 0; idx < num_elmts; idx++)
+#ifdef CUDADMA_DEBUG_ON
+    assert(total_lds <= (BYTES_PER_THREAD/sizeof(BULK_TYPE)));
+#endif
+    for (int idx = 0; idx < total_lds; idx++)
     {
       perform_load<BULK_TYPE>(src_ptr, &temp[idx]);
       src_ptr += src_stride;
     }
     if (DO_SYNC) CUDADMA_BASE::wait_for_dma_start();
-    // WRite all the registers into their destinations
-    for (unsigned idx = 0; idx < num_elmts; idx++)
+    // Write all the registers into their destinations
+    for (int idx = 0; idx < total_lds; idx++)
     {
       perform_store<BULK_TYPE>(dst_ptr, &temp[idx]);
       dst_ptr += dst_stride;

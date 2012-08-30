@@ -118,11 +118,11 @@ protected:
 			 LDS_PER_ELMT > (WARP_SIZE/8) ? (WARP_SIZE/4) : \
 			 LDS_PER_ELMT > (WARP_SIZE/16) ? (WARP_SIZE/8) : \
 			 LDS_PER_ELMT > (WARP_SIZE/32) ? (WARP_SIZE/16) : WARP_SIZE/32)
-#define ELMT_PER_STEP_SPLIT (DMA_THREADS/THREADS_PER_ELMT)
-#define ROW_ITERS_SPLIT	 (NUM_ELMTS/ELMT_PER_STEP_SPLIT)
+#define ELMT_PER_STEP_SPLIT ((DMA_THREADS/THREADS_PER_ELMT) * MAX_LDS_PER_THREAD)
+#define ROW_ITERS_SPLIT	 (MAX_LDS_PER_THREAD)
 #define HAS_PARTIAL_ELMTS_SPLIT ((NUM_ELMTS % ELMT_PER_STEP_SPLIT) != 0)
 #define HAS_PARTIAL_BYTES_SPLIT ((LDS_PER_ELMT % THREADS_PER_ELMT) != 0)
-#define COL_ITERS_SPLIT  (HAS_PARTIAL_BYTES ? 1 : 0)
+#define COL_ITERS_SPLIT  ((LDS_PER_ELMT == THREADS_PER_ELMT) ? 1 : 0)
 #define STEP_ITERS_SPLIT (NUM_ELMTS/ELMT_PER_STEP_SPLIT)
 
 #define NUM_WARPS (DMA_THREADS/WARP_SIZE)
@@ -146,7 +146,7 @@ protected:
 // the total number of elements to be handled by each thread in a step by
 // the total number of groups of warps (also total groups of threads)
 #define ELMT_PER_STEP_FULL (ELMT_PER_STEP_PER_THREAD * (NUM_WARPS/WARPS_PER_ELMT))
-#define ROW_ITERS_FULL (NUM_ELMTS/ELMT_PER_STEP_FULL)
+#define ROW_ITERS_FULL (ELMT_PER_STEP_FULL)
 #define HAS_PARTIAL_ELMTS_FULL ((NUM_ELMTS % ELMT_PER_STEP_FULL) != 0)
 #define HAS_PARTIAL_BYTES_FULL ((LDS_PER_ELMT % (WARPS_PER_ELMT*WARP_SIZE)) != 0)
 #define COL_ITERS_FULL (LDS_PER_ELMT/(WARPS_PER_ELMT*WARP_SIZE))
@@ -161,17 +161,19 @@ protected:
 #define SPLIT_GROUP_TID (threadIdx.x - (dma_threadIdx_start + (ELMT_ID_SPLIT * THREADS_PER_ELMT)))
 #define INIT_SRC_OFFSET_SPLIT(_src_stride) (ELMT_ID_SPLIT * _src_stride + SPLIT_GROUP_TID * ALIGNMENT)
 #define INIT_DST_OFFSET_SPLIT(_dst_stride) (ELMT_ID_SPLIT * _dst_stride + SPLIT_GROUP_TID * ALIGNMENT)
-#define INIT_SRC_ELMT_STRIDE_SPLIT(_src_stride) (ELMT_PER_STEP_SPLIT * _src_stride)
-#define INIT_DST_ELMT_STRIDE_SPLIT(_dst_stride) (ELMT_PER_STEP_SPLIT * _dst_stride)
+#define INIT_SRC_STEP_STRIDE_SPLIT(_src_stride) (ELMT_PER_STEP_SPLIT * _src_stride)
+#define INIT_DST_STEP_STRIDE_SPLIT(_dst_stride) (ELMT_PER_STEP_SPLIT * _dst_stride)
+#define INIT_SRC_ELMT_STRIDE_SPLIT(_src_stride) ((DMA_THREADS/THREADS_PER_ELMT) * _src_stride)
+#define INIT_DST_ELMT_STRIDE_SPLIT(_dst_stride) ((DMA_THREADS/THREADS_PER_ELMT) * _dst_stride)
 #define INIT_INTRA_ELMT_STRIDE_SPLIT (THREADS_PER_ELMT * ALIGNMENT) // Shouldn't really matter
 #define REMAINING_LOADS_SPLIT (FULL_LDS_PER_ELMT % THREADS_PER_ELMT)
 // Three cases:
 //     1. group id < remaining loads -> partial bytes is ALIGNMENT
 //     2. group id > remaining loads -> partial bytes is 0
 //     3. group id == remaining loads -> partial bytes is difference between total bytes and full loads * ALIGNMENT
-#define INIT_PARTIAL_BYTES_SPLIT ((SPLIT_GROUP_TID < REMAINING_LOADS_SPLIT) ? ALIGNMENT : \
-                                  (SPLIT_GROUP_TID > REMAINING_LOADS_SPLIT) ? 0 : \
-                                  (BYTES_PER_ELMT - (FULL_LDS_PER_ELMT * ALIGNMENT)))
+#define INIT_PARTIAL_BYTES_SPLIT ((SPLIT_GROUP_TID > REMAINING_LOADS_SPLIT) ? 0 : \
+                                  (SPLIT_GROUP_TID == REMAINING_LOADS_SPLIT) ? (BYTES_PER_ELMT - (FULL_LDS_PER_ELMT * ALIGNMENT)) : \
+                                  ALIGNMENT)
 #define REMAINING_ELMTS_SPLIT (NUM_ELMTS % ELMT_PER_STEP_SPLIT)
 #define FULL_REMAINING_SPLIT (REMAINING_ELMTS_SPLIT / (DMA_THREADS/THREADS_PER_ELMT))
 #define LAST_REMAINING_SPLIT (REMAINING_ELMTS_SPLIT % (DMA_THREADS/THREADS_PER_ELMT))
@@ -179,29 +181,38 @@ protected:
 //     1. element id < last_remaining -> full_remaining+1
 //     2. element id >= last_remaining -> full_remaining
 #define INIT_PARTIAL_ELMTS_SPLIT (FULL_REMAINING_SPLIT + \
-                                  ((ELMT_ID_SPLIT < LAST_REMAINING_SPLIT) ? 1 : 0))
+                                  ((LAST_REMAINING_SPLIT==0) ? 0 : \
+                                   ((ELMT_ID_SPLIT >= LAST_REMAINING_SPLIT) ? 0 : 1)))
 // Now we do the non-split versions
 #define ELMT_ID_FULL (CUDADMA_DMA_TID/(WARPS_PER_ELMT*WARP_SIZE))
 #define FULL_GROUP_TID (threadIdx.x - (dma_threadIdx_start + (ELMT_ID_FULL * WARPS_PER_ELMT * WARP_SIZE)))
 #define INIT_SRC_OFFSET_FULL(_src_stride) (ELMT_ID_FULL * _src_stride + FULL_GROUP_TID * ALIGNMENT)
 #define INIT_DST_OFFSET_FULL(_dst_stride) (ELMT_ID_FULL * _dst_stride + FULL_GROUP_TID * ALIGNMENT)
-#define INIT_SRC_ELMT_STRIDE_FULL(_src_stride) (ELMT_PER_STEP_FULL * _src_stride)
-#define INIT_DST_ELMT_STRIDE_FULL(_dst_stride) (ELMT_PER_STEP_FULL * _dst_stride)
+#define INIT_SRC_STEP_STRIDE_FULL(_src_stride) (ELMT_PER_STEP_FULL * _src_stride)
+#define INIT_DST_STEP_STRIDE_FULL(_dst_stride) (ELMT_PER_STEP_FULL * _dst_stride)
+#define INIT_SRC_ELMT_STRIDE_FULL(_src_stride) ((NUM_WARPS/WARPS_PER_ELMT) * _src_stride)
+#define INIT_DST_ELMT_STRIDE_FULL(_dst_stride) ((NUM_WARPS/WARPS_PER_ELMT) * _dst_stride)
 #define INIT_INTRA_ELMT_STRIDE_FULL (WARPS_PER_ELMT * WARP_SIZE * ALIGNMENT)
 #define REMAINING_LOADS_FULL (FULL_LDS_PER_ELMT % (WARPS_PER_ELMT * WARP_SIZE))
 // Same three cases as for split
-#define INIT_PARTIAL_BYTES_FULL ((FULL_GROUP_TID < REMAINING_LOADS_FULL) ? ALIGNMENT : \
+#define INIT_PARTIAL_BYTES_FULL ((REMAINING_LOADS_FULL==0) ? 0 : \
                                  (FULL_GROUP_TID > REMAINING_LOADS_FULL) ? 0 : \
-                                 (BYTES_PER_ELMT - (FULL_LDS_PER_ELMT * ALIGNMENT)))
+                                 (FULL_GROUP_TID == REMAINING_LOADS_FULL) ? (BYTES_PER_ELMT - (FULL_LDS_PER_ELMT * ALIGNMENT)) : \
+                                  ALIGNMENT)
 #define REMAINING_ELMTS_FULL (NUM_ELMTS % ELMT_PER_STEP_FULL)
 #define FULL_REMAINING_FULL (REMAINING_ELMTS_FULL / (DMA_THREADS/(WARPS_PER_ELMT * WARP_SIZE)))
 #define LAST_REMAINING_FULL (REMAINING_ELMTS_FULL % (DMA_THREADS/(WARPS_PER_ELMT * WARP_SIZE)))
 // Same two cases as for split
 #define INIT_PARTIAL_ELMTS_FULL (FULL_REMAINING_FULL + \
-                                  ((ELMT_ID_FULL < LAST_REMAINING_FULL) ? 1 : 0))
+                                  ((LAST_REMAINING_FULL==0) ? 0 : \
+                                   ((ELMT_ID_FULL < LAST_REMAINING_FULL) ? 1 : 0)))
 
 #define INIT_SRC_OFFSET(_src_stride) (SPLIT_WARP ? INIT_SRC_OFFSET_SPLIT(_src_stride) : INIT_SRC_OFFSET_FULL(_src_stride))
 #define INIT_DST_OFFSET(_dst_stride) (SPLIT_WARP ? INIT_DST_OFFSET_SPLIT(_dst_stride) : INIT_DST_OFFSET_FULL(_dst_stride))
+#define INIT_SRC_STEP_STRIDE(_src_stride) (SPLIT_WARP ? INIT_SRC_STEP_STRIDE_SPLIT(_src_stride) : \
+                                                        INIT_SRC_STEP_STRIDE_FULL(_src_stride))
+#define INIT_DST_STEP_STRIDE(_dst_stride) (SPLIT_WARP ? INIT_DST_STEP_STRIDE_SPLIT(_dst_stride) : \
+                                                        INIT_DST_STEP_STRIDE_FULL(_dst_stride))
 #define INIT_SRC_ELMT_STRIDE(_src_stride) (SPLIT_WARP ? INIT_SRC_ELMT_STRIDE_SPLIT(_src_stride) : \
                                                         INIT_SRC_ELMT_STRIDE_FULL(_src_stride))
 #define INIT_DST_ELMT_STRIDE(_dst_stride) (SPLIT_WARP ? INIT_DST_ELMT_STRIDE_SPLIT(_dst_stride) : \
@@ -210,6 +221,45 @@ protected:
 #define INIT_PARTIAL_BYTES (SPLIT_WARP ? INIT_PARTIAL_BYTES_SPLIT : INIT_PARTIAL_BYTES_FULL)
 #define INIT_PARTIAL_ELMTS (SPLIT_WARP ? INIT_PARTIAL_ELMTS_SPLIT : INIT_PARTIAL_ELMTS_FULL)
 #define INIT_PARTIAL_OFFSET (SPLIT_WARP ? 0 : ((FULL_LDS_PER_ELMT - (FULL_LDS_PER_ELMT % (WARPS_PER_ELMT * WARP_SIZE))) * ALIGNMENT))
+
+#include <cstdio>
+template<int ALIGNMENT, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
+__host__ void print_strided_variables(void)
+{
+#define PRINT_VAR(var_name) printf(#var_name " %d\n", (var_name))
+  PRINT_VAR(MAX_LDS_PER_THREAD);
+  PRINT_VAR(LDS_PER_ELMT);
+  PRINT_VAR(FULL_LDS_PER_ELMT);
+  PRINT_VAR(SPLIT_WARP);
+  printf("---------- Split math ---------\n");
+  PRINT_VAR(THREADS_PER_ELMT);
+  PRINT_VAR(ELMT_PER_STEP_SPLIT);
+  PRINT_VAR(ROW_ITERS_SPLIT);
+  PRINT_VAR(HAS_PARTIAL_ELMTS_SPLIT);
+  PRINT_VAR(HAS_PARTIAL_BYTES_SPLIT);
+  PRINT_VAR(COL_ITERS_SPLIT);
+  PRINT_VAR(STEP_ITERS_SPLIT); 
+  printf("---------- Full math ----------\n");
+  PRINT_VAR(NUM_WARPS);
+  PRINT_VAR(SINGLE_WARP);
+  PRINT_VAR(MAX_WARPS_PER_ELMT);
+  PRINT_VAR(WARPS_PER_ELMT);
+  PRINT_VAR(LDS_PER_ELMT_PER_THREAD);
+  PRINT_VAR(ELMT_PER_STEP_PER_THREAD);
+  PRINT_VAR(ELMT_PER_STEP_FULL);
+  PRINT_VAR(ROW_ITERS_FULL);
+  PRINT_VAR(HAS_PARTIAL_ELMTS_FULL);
+  PRINT_VAR(HAS_PARTIAL_BYTES_FULL);
+  PRINT_VAR(COL_ITERS_FULL);
+  PRINT_VAR(STEP_ITERS_FULL);
+  printf("----------- Offsets -----------\n");
+  PRINT_VAR(INIT_SRC_STEP_STRIDE(BYTES_PER_ELMT));
+  PRINT_VAR(INIT_DST_STEP_STRIDE(BYTES_PER_ELMT));
+  PRINT_VAR(INIT_SRC_ELMT_STRIDE(BYTES_PER_ELMT));
+  PRINT_VAR(INIT_DST_ELMT_STRIDE(BYTES_PER_ELMT));
+  PRINT_VAR(INIT_INTRA_ELMT_STRIDE);
+#undef PRINT_VAR
+}
 
 // Bytes-per-thread will manage the number of registers available for each thread
 // Bytes-per-thread must be divisible by alignment
@@ -225,6 +275,8 @@ public:
     : CUDADMA_BASE(dmaID,DMA_THREADS,num_compute_threads,dma_threadIdx_start),
       dma_src_offset(INIT_SRC_OFFSET(el_stride)),
       dma_dst_offset(INIT_DST_OFFSET(el_stride)),
+      dma_src_step_stride(INIT_SRC_STEP_STRIDE(el_stride)),
+      dma_dst_step_stride(INIT_DST_STEP_STRIDE(el_stride)),
       dma_src_elmt_stride(INIT_SRC_ELMT_STRIDE(el_stride)),
       dma_dst_elmt_stride(INIT_DST_ELMT_STRIDE(el_stride)),
       dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
@@ -245,6 +297,8 @@ public:
     : CUDADMA_BASE(dmaID,DMA_THREADS,num_compute_threads,dma_threadIdx_start),
       dma_src_offset(INIT_SRC_OFFSET(src_stride)),
       dma_dst_offset(INIT_DST_OFFSET(dst_stride)),
+      dma_src_step_stride(INIT_SRC_STEP_STRIDE(src_stride)),
+      dma_dst_step_stride(INIT_DST_STEP_STRIDE(dst_stride)),
       dma_src_elmt_stride(INIT_SRC_ELMT_STRIDE(src_stride)),
       dma_dst_elmt_stride(INIT_DST_ELMT_STRIDE(dst_stride)),
       dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
@@ -312,9 +366,16 @@ public:
 	  CUDADMA_BASE::wait_for_dma_start();
         for (int i = 0; i < DMA_STEP_ITERS_SPLIT; i++)
 	{
-	  all_partial_cases<BULK_TYPE,false,DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
+	  all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,false/*partial rows*/,
 	  			DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(src_off_ptr, dst_off_ptr);
+          src_off_ptr += dma_src_step_stride;
+          dst_off_ptr += dma_dst_step_stride;
 	}
+        if (DMA_PARTIAL_ROWS)
+        {
+          all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,true/*partial rows*/,
+                                DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(src_off_ptr, dst_off_ptr);
+        }
       }
     }
     else // Not split
@@ -330,9 +391,16 @@ public:
 	  CUDADMA_BASE::wait_for_dma_start();
 	for (int i = 0; i < DMA_STEP_ITERS_FULL; i++)
 	{
-	  all_partial_cases<BULK_TYPE,false,DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
+	  all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,false/*partial rows*/,
 	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr,dst_off_ptr);
+          src_off_ptr += dma_src_step_stride;
+          dst_off_ptr += dma_dst_step_stride;
 	}
+        if (DMA_PARTIAL_ROWS)
+        {
+          all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,true/*partial rows*/,
+                                DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr,dst_off_ptr);
+        }
       }
     }
     if (DO_SYNC_TOP)
@@ -624,6 +692,8 @@ public:
 private:
   const unsigned int dma_src_offset;
   const unsigned int dma_dst_offset;
+  const unsigned int dma_src_step_stride;
+  const unsigned int dma_dst_step_stride;
   const unsigned int dma_src_elmt_stride;
   const unsigned int dma_dst_elmt_stride;
   const unsigned int dma_intra_elmt_stride;

@@ -123,7 +123,8 @@ protected:
 #define HAS_PARTIAL_ELMTS_SPLIT ((NUM_ELMTS % ELMT_PER_STEP_SPLIT) != 0)
 #define HAS_PARTIAL_BYTES_SPLIT ((LDS_PER_ELMT % THREADS_PER_ELMT) != 0)
 #define COL_ITERS_SPLIT  ((LDS_PER_ELMT == THREADS_PER_ELMT) ? 1 : 0)
-#define STEP_ITERS_SPLIT (NUM_ELMTS/ELMT_PER_STEP_SPLIT)
+#define STEP_ITERS_SPLIT ((NUM_ELMTS >= ELMT_PER_STEP_SPLIT) ? NUM_ELMTS/ELMT_PER_STEP_SPLIT : \
+                                                               NUM_ELMTS/(DMA_THREADS/THREADS_PER_ELMT))
 
 #define NUM_WARPS (DMA_THREADS/WARP_SIZE)
 // Now handle the case where we don't have to split a warp across multiple elements.
@@ -131,25 +132,34 @@ protected:
 // We only do this if every warp will be busy, otherwise we'll allocate warps to elements
 // to maximize MLP.
 #define SINGLE_WARP ((LDS_PER_ELMT <= (WARP_SIZE*MAX_LDS_PER_THREAD)) && (NUM_WARPS <= NUM_ELMTS))
+// If we can't do single, figure out the minimum number of warps needed to cover
+// the element doing as many loads as possible and allocate those warps.  The idea here is to get
+// a small number of warps on each element to minimize the wasting of warps.
+#define MINIMUM_COVER ((LDS_PER_ELMT+(WARP_SIZE*MAX_LDS_PER_THREAD)-1)/(WARP_SIZE*MAX_LDS_PER_THREAD))
 // Otherwise we'll allocate as many warps as possible to a single element to maximize MLP.
 // Try to allocate as many warps as possible to an element, each performing one load
 // to maximize MLP, if we exceed the maximum, then split the group of warps across
 // multiple elements.  Once we've allocated warps to elements, see how many elements we
 // can handle based on the number of outstanding loads each thread can have.
-#define MAX_WARPS_PER_ELMT (LDS_PER_ELMT/WARP_SIZE)
+#define MAX_WARPS_PER_ELMT ((LDS_PER_ELMT+WARP_SIZE-1)/WARP_SIZE)
 #define WARPS_PER_ELMT (SINGLE_WARP ? 1 : \
-	((MAX_WARPS_PER_ELMT >= NUM_WARPS) ? NUM_WARPS : MAX_WARPS_PER_ELMT))
+                        (NUM_WARPS <= NUM_ELMTS) ? MINIMUM_COVER : \
+                        ((MAX_WARPS_PER_ELMT >= NUM_WARPS) ? NUM_WARPS : MAX_WARPS_PER_ELMT))
 // Figure out how many loads need to be done per thread per element (round up)
 #define LDS_PER_ELMT_PER_THREAD ((LDS_PER_ELMT+(WARPS_PER_ELMT*WARP_SIZE)-1)/(WARPS_PER_ELMT*WARP_SIZE))
+// This assumes that the number of warps allocated to the element were enough to
+// cover the size of the element.
 #define ELMT_PER_STEP_PER_THREAD (MAX_LDS_PER_THREAD/LDS_PER_ELMT_PER_THREAD)
 // Now we can figure out how many elements we can handle per step by multiplying
 // the total number of elements to be handled by each thread in a step by
 // the total number of groups of warps (also total groups of threads)
 #define ELMT_PER_STEP_FULL (ELMT_PER_STEP_PER_THREAD * (NUM_WARPS/WARPS_PER_ELMT))
-#define ROW_ITERS_FULL (ELMT_PER_STEP_FULL)
+#define ROW_ITERS_FULL (ELMT_PER_STEP_PER_THREAD)
 #define HAS_PARTIAL_ELMTS_FULL ((NUM_ELMTS % ELMT_PER_STEP_FULL) != 0)
 #define HAS_PARTIAL_BYTES_FULL ((LDS_PER_ELMT % (WARPS_PER_ELMT*WARP_SIZE)) != 0)
 #define COL_ITERS_FULL (LDS_PER_ELMT/(WARPS_PER_ELMT*WARP_SIZE))
+//#define STEP_ITERS_FULL ((NUM_ELMTS >= ELMT_PER_STEP_FULL) ? NUM_ELMTS/ELMT_PER_STEP_FULL : \
+//                                                             NUM_ELMTS/(NUM_WARPS/WARPS_PER_ELMT))
 #define STEP_ITERS_FULL (NUM_ELMTS/ELMT_PER_STEP_FULL)
 
 #define HAS_PARTIAL_BYTES (SPLIT_WARP ? HAS_PARTIAL_BYTES_SPLIT : HAS_PARTIAL_BYTES_FULL)
@@ -206,6 +216,13 @@ protected:
 #define INIT_PARTIAL_ELMTS_FULL (FULL_REMAINING_FULL + \
                                   ((LAST_REMAINING_FULL==0) ? 0 : \
                                    ((ELMT_ID_FULL < LAST_REMAINING_FULL) ? 1 : 0)))
+// We also have one more case here for full warp allocation:
+// to determine if our warp is one of the active warps
+#define WARP_ID (CUDADMA_DMA_TID/WARP_SIZE)
+#define NUM_ACTIVE_WARPS ((NUM_WARPS > (NUM_ELMTS*WARPS_PER_ELMT)) ? NUM_ELMTS*WARPS_PER_ELMT : \
+                                                                    (NUM_WARPS - (NUM_WARPS % WARPS_PER_ELMT)))
+#define INIT_ACTIVE_WARP (WARP_ID < NUM_ACTIVE_WARPS)
+#define ALL_WARPS_ACTIVE (NUM_WARPS == NUM_ACTIVE_WARPS) 
 
 #define INIT_SRC_OFFSET(_src_stride) (SPLIT_WARP ? INIT_SRC_OFFSET_SPLIT(_src_stride) : INIT_SRC_OFFSET_FULL(_src_stride))
 #define INIT_DST_OFFSET(_dst_stride) (SPLIT_WARP ? INIT_DST_OFFSET_SPLIT(_dst_stride) : INIT_DST_OFFSET_FULL(_dst_stride))
@@ -252,12 +269,16 @@ __host__ void print_strided_variables(void)
   PRINT_VAR(HAS_PARTIAL_BYTES_FULL);
   PRINT_VAR(COL_ITERS_FULL);
   PRINT_VAR(STEP_ITERS_FULL);
+  PRINT_VAR(ALL_WARPS_ACTIVE);
+  PRINT_VAR(NUM_ACTIVE_WARPS);
+  PRINT_VAR(REMAINING_ELMTS_FULL);
   printf("----------- Offsets -----------\n");
   PRINT_VAR(INIT_SRC_STEP_STRIDE(BYTES_PER_ELMT));
   PRINT_VAR(INIT_DST_STEP_STRIDE(BYTES_PER_ELMT));
   PRINT_VAR(INIT_SRC_ELMT_STRIDE(BYTES_PER_ELMT));
   PRINT_VAR(INIT_DST_ELMT_STRIDE(BYTES_PER_ELMT));
   PRINT_VAR(INIT_INTRA_ELMT_STRIDE);
+  PRINT_VAR(INIT_PARTIAL_OFFSET);
 #undef PRINT_VAR
 }
 
@@ -282,7 +303,8 @@ public:
       dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
       dma_partial_bytes(INIT_PARTIAL_BYTES),
       dma_partial_offset(INIT_PARTIAL_OFFSET),
-      dma_partial_elmts(INIT_PARTIAL_ELMTS)
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
   {
 #ifdef CUDADMA_DEBUG_ON
     assert((BYTES_PER_THREAD%ALIGNMENT) == 0);
@@ -304,7 +326,8 @@ public:
       dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
       dma_partial_bytes(INIT_PARTIAL_BYTES),
       dma_partial_offset(INIT_PARTIAL_OFFSET),
-      dma_partial_elmts(INIT_PARTIAL_ELMTS)
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
   {
 #ifdef CUDADMA_DEBUG_ON
     assert((BYTES_PER_THREAD%ALIGNMENT) == 0);
@@ -319,21 +342,21 @@ public:
       	{
           execute_internal<float,SPLIT_WARP,STEP_ITERS_SPLIT,ROW_ITERS_SPLIT,COL_ITERS_SPLIT,
 	  				    STEP_ITERS_FULL,ROW_ITERS_FULL,COL_ITERS_FULL,
-					    HAS_PARTIAL_BYTES, HAS_PARTIAL_ELMTS>(src_ptr,dst_ptr);
+					    HAS_PARTIAL_BYTES,HAS_PARTIAL_ELMTS,ALL_WARPS_ACTIVE>(src_ptr,dst_ptr);
 	  break;
 	}
     case 8:
       	{
 	  execute_internal<float2,SPLIT_WARP,STEP_ITERS_SPLIT,ROW_ITERS_SPLIT,COL_ITERS_SPLIT,
 	  			  	     STEP_ITERS_FULL,ROW_ITERS_FULL,COL_ITERS_FULL,
-					     HAS_PARTIAL_BYTES, HAS_PARTIAL_ELMTS>(src_ptr,dst_ptr);
+					     HAS_PARTIAL_BYTES,HAS_PARTIAL_ELMTS,ALL_WARPS_ACTIVE>(src_ptr,dst_ptr);
 	  break;
 	}
     case 16:
       	{
 	  execute_internal<float4,SPLIT_WARP,STEP_ITERS_SPLIT,ROW_ITERS_SPLIT,COL_ITERS_SPLIT,
 	  			  	     STEP_ITERS_FULL,ROW_ITERS_FULL,COL_ITERS_FULL,
-					     HAS_PARTIAL_BYTES, HAS_PARTIAL_ELMTS>(src_ptr,dst_ptr);
+					     HAS_PARTIAL_BYTES,HAS_PARTIAL_ELMTS,ALL_WARPS_ACTIVE>(src_ptr,dst_ptr);
 	  break;
 	}
 #ifdef CUDADMA_DEBUG_ON
@@ -348,7 +371,7 @@ public:
   template<typename BULK_TYPE, bool DMA_IS_SPLIT,
            int DMA_STEP_ITERS_SPLIT, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_SPLIT,
            int DMA_STEP_ITERS_FULL,  int DMA_ROW_ITERS_FULL,  int DMA_COL_ITERS_FULL,
-	   bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS>
+	   bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS, bool DMA_ALL_WARPS_ACTIVE>
   __device__ __forceinline__ void execute_internal(const void *RESTRICT src_ptr, void *RESTRICT dst_ptr) const
   {
     const char * src_off_ptr = ((const char*)src_ptr) + dma_src_offset;
@@ -380,27 +403,59 @@ public:
     }
     else // Not split
     {
-      if (DMA_STEP_ITERS_FULL == 0)
+      if (DMA_ALL_WARPS_ACTIVE) // Check to see if all the warps are active
       {
-        all_partial_cases<BULK_TYPE,DO_SYNC_TOP,DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
-				DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr,dst_off_ptr);
-      }
-      else
-      {
-        if (DO_SYNC_TOP)
-	  CUDADMA_BASE::wait_for_dma_start();
-	for (int i = 0; i < DMA_STEP_ITERS_FULL; i++)
-	{
-	  all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,false/*partial rows*/,
-	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr,dst_off_ptr);
-          src_off_ptr += dma_src_step_stride;
-          dst_off_ptr += dma_dst_step_stride;
-	}
-        if (DMA_PARTIAL_ROWS)
+        if (DMA_STEP_ITERS_FULL == 0)
         {
-          all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,true/*partial rows*/,
-                                DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr,dst_off_ptr);
+          all_partial_cases<BULK_TYPE,DO_SYNC_TOP,DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
+                                  DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr,dst_off_ptr);
         }
+        else
+        {
+          if (DO_SYNC_TOP)
+            CUDADMA_BASE::wait_for_dma_start();
+          for (int i = 0; i < DMA_STEP_ITERS_FULL; i++)
+          {
+            all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,false/*partial rows*/,
+                                  DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr,dst_off_ptr);
+            src_off_ptr += dma_src_step_stride;
+            dst_off_ptr += dma_dst_step_stride;
+          }
+          if (DMA_PARTIAL_ROWS)
+          {
+            all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,true/*partial rows*/,
+                                  DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr,dst_off_ptr);
+          }
+        }
+      }
+      else if (dma_active_warp) // Otherwise mask off unused warps
+      {
+        if (DMA_STEP_ITERS_FULL == 0)
+        {
+          all_partial_cases<BULK_TYPE,DO_SYNC_TOP,DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
+                                  DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr,dst_off_ptr);
+        }
+        else
+        {
+          if (DO_SYNC_TOP)
+            CUDADMA_BASE::wait_for_dma_start();
+          for (int i = 0; i < DMA_STEP_ITERS_FULL; i++)
+          {
+            all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,false/*partial rows*/,
+                                  DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr,dst_off_ptr);
+            src_off_ptr += dma_src_step_stride;
+            dst_off_ptr += dma_dst_step_stride;
+          }
+          if (DMA_PARTIAL_ROWS)
+          {
+            all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,true/*partial rows*/,
+                                  DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr,dst_off_ptr);
+          }
+        }
+      }
+      else if (DO_SYNC_TOP) // Otherwise unused warps still have to synchronize
+      {
+        CUDADMA_BASE::wait_for_dma_start();
       }
     }
     if (DO_SYNC_TOP)
@@ -700,5 +755,6 @@ private:
   const unsigned int dma_partial_bytes;
   const unsigned int dma_partial_offset;
   const unsigned int dma_partial_elmts;
+  const bool         dma_active_warp;
 };
 

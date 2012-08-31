@@ -525,52 +525,11 @@ public:
     }
     if (!DMA_ALL_ACTIVE)
     {
-      switch (partial_bytes)
-      {
-	case 0:
-	  {
-	    if (DO_SYNC)
-	      CUDADMA_BASE::wait_for_dma_start();
-	    break;
-	  }
-	case 4:
-	  {
-            do_strided_across<float,DO_SYNC,DMA_ROW_ITERS>(src_ptr+dma_partial_offset,
-	    					       	   dst_ptr+dma_partial_offset,
-						       	   src_elmt_stride,
-						       	   dst_elmt_stride);
-	    break;
-	  }
-	case 8:
-	  {
-	    do_strided_across<float2,DO_SYNC,DMA_ROW_ITERS>(src_ptr+dma_partial_offset,
-	    						    dst_ptr+dma_partial_offset,
-							    src_elmt_stride,
-							    dst_elmt_stride);
-	    break;
-	  }
-	case 12:
-	  {
-	    do_strided_across<float3,DO_SYNC,DMA_ROW_ITERS>(src_ptr+dma_partial_offset,
-	    						    dst_ptr+dma_partial_offset,
-							    src_elmt_stride,
-							    dst_elmt_stride);
-	    break;
-	  }
-	case 16:
-	  {
-	    do_strided_across<float4,DO_SYNC,DMA_ROW_ITERS>(src_ptr+dma_partial_offset,
-	    						    dst_ptr+dma_partial_offset,
-							    src_elmt_stride,
-							    dst_elmt_stride);
-	    break;
-	  }
-#ifdef CUDADMA_DEBUG_ON
-	default:
-	  printf("Invalid partial bytes size (%d) for strided across.\n" partial_bytes);
-	  assert(false);
-#endif
-      }
+      do_strided_across<DO_SYNC,DMA_ROW_ITERS>(src_ptr+dma_partial_offset,
+                                               dst_ptr+dma_partial_offset,
+                                               src_elmt_stride,
+                                               dst_elmt_stride,
+                                               partial_bytes);
     }
     else if (DO_SYNC) // Otherwise check to see if we should do the sync here
     {
@@ -593,26 +552,129 @@ public:
     }
   }
 
-  template<typename BULK_TYPE, bool DO_SYNC, int DMA_ROW_ITERS>
+  template<bool DO_SYNC, int DMA_ROW_ITERS>
   __device__ __forceinline__ void do_strided_across(const char *RESTRICT src_ptr,
   						    char       *RESTRICT dst_ptr,
 						    const int src_elmt_stride,
-						    const int dst_elmt_stride) const
+						    const int dst_elmt_stride,
+                                                    const int partial_bytes) const
   {
-    BULK_TYPE temp[GUARD_ZERO(DMA_ROW_ITERS)];
+    // Note we need to have two switch statements in here because we can't
+    // have branches that might cause warp divergence with synchronization
+    // calls inside of them, otherwise we get deadlock.
+    float temp[GUARD_ZERO(DMA_ROW_ITERS*ALIGNMENT/sizeof(float))];
     // Perform the loads
-    for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+    switch (partial_bytes)
     {
-      perform_load<BULK_TYPE>(src_ptr, &(temp[idx]));
-      src_ptr += src_elmt_stride;
+      case 0:
+        break;
+      case 4:
+        {
+          float *temp_ptr = (float*)temp;
+          for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+          {
+            perform_load<float>(src_ptr, temp_ptr);
+            src_ptr += src_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+      case 8:
+        {
+          float2 *temp_ptr = (float2*)temp;
+          for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+          {
+            perform_load<float2>(src_ptr, temp_ptr);
+            src_ptr += src_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+      case 12:
+        {
+          float3 *temp_ptr = (float3*)temp;
+          for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+          {
+            perform_load<float3>(src_ptr, temp_ptr);
+            src_ptr += src_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+      case 16:
+        {
+          float4 *temp_ptr = (float4*)temp;
+          for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+          {
+            perform_load<float4>(src_ptr, temp_ptr);
+            src_ptr += src_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+#ifdef CUDADMA_DEBUG_ON
+      default:
+        printf("Invalid partial bytes size (%d) for strided across.\n" partial_bytes);
+        assert(false);
+#endif
     }
+    // Check for the synchronization 
     if (DO_SYNC)
       CUDADMA_BASE::wait_for_dma_start();
     // Perform the stores
-    for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+    switch (partial_bytes)
     {
-      perform_store<BULK_TYPE>(&(temp[idx]), dst_ptr);
-      dst_ptr += dst_elmt_stride;
+      case 0:
+        break;
+      case 4:
+        {
+          const float *temp_ptr = (const float*)temp;
+          for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+          {
+            perform_store<float>(temp_ptr, dst_ptr);
+            dst_ptr += dst_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+      case 8:
+        {
+          const float2 *temp_ptr = (const float2*)temp;
+          for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+          {
+            perform_store<float2>(temp_ptr, dst_ptr);
+            dst_ptr += dst_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+      case 12:
+        {
+          const float3 *temp_ptr = (const float3*)temp;
+          for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+          {
+            perform_store<float3>(temp_ptr, dst_ptr);
+            dst_ptr += dst_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+      case 16:
+        {
+          const float4 *temp_ptr = (const float4*)temp;
+          for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+          {
+            perform_store<float4>(temp_ptr, dst_ptr);
+            dst_ptr += dst_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+#ifdef CUDADMA_DEBUG_ON
+      default:
+        printf("Invalid partial bytes size (%d) for strided across.\n" partial_bytes);
+        assert(false);
+#endif
     }
   }
 
@@ -645,56 +707,12 @@ public:
     }
     if (!DMA_ALL_ACTIVE)
     {
-      switch (partial_bytes)
-      {
-	case 0:
-	  {
-	    if (DO_SYNC)
-	      CUDADMA_BASE::wait_for_dma_start();
-	    break;
-	  }
-	case 4:
-	  {
-            do_strided_across_upper<float,DO_SYNC,DMA_ROW_ITERS_UPPER>(src_ptr+dma_partial_offset,
-	    					       dst_ptr+dma_partial_offset,
-						       src_elmt_stride,
-						       dst_elmt_stride,
-						       row_iters);
-	    break;
-	  }
-	case 8:
-	  {
-	    do_strided_across_upper<float2,DO_SYNC,DMA_ROW_ITERS_UPPER>(src_ptr+dma_partial_offset,
-	    						dst_ptr+dma_partial_offset,
-							src_elmt_stride,
-							dst_elmt_stride,
-							row_iters);
-	    break;
-	  }
-	case 12:
-	  {
-	    do_strided_across_upper<float3,DO_SYNC,DMA_ROW_ITERS_UPPER>(src_ptr+dma_partial_offset,
-	    						dst_ptr+dma_partial_offset,
-							src_elmt_stride,
-							dst_elmt_stride,
-							row_iters);
-	    break;
-	  }
-	case 16:
-	  {
-	    do_strided_across_upper<float4,DO_SYNC,DMA_ROW_ITERS_UPPER>(src_ptr+dma_partial_offset,
-	    						dst_ptr+dma_partial_offset,
-							src_elmt_stride,
-							dst_elmt_stride,
-							row_iters);
-	    break;
-	  }
-#ifdef CUDADMA_DEBUG_ON
-	default:
-	  printf("Invalid partial bytes size (%d) for strided across.\n" partial_bytes);
-	  assert(false);
-#endif
-      }
+      // Can't have a branch which might split a warp have a sync operation inside it
+      // because this will cause things to deadlock.
+      do_strided_across_upper<DO_SYNC,DMA_ROW_ITERS_UPPER>(src_ptr+dma_partial_offset,
+                                                           dst_ptr+dma_partial_offset,
+                                                           src_elmt_stride, dst_elmt_stride,
+                                                           row_iters, partial_bytes);
     }
     else if (DO_SYNC) // Otherwise check to see if we should do the sync here
     {
@@ -717,30 +735,131 @@ public:
     }
   }
 
-  template<typename BULK_TYPE, bool DO_SYNC, int DMA_ROW_ITERS_UPPER>
+  template<bool DO_SYNC, int DMA_ROW_ITERS_UPPER>
   __device__ __forceinline__ void do_strided_across_upper(const char *RESTRICT src_ptr,
   						    char       *RESTRICT dst_ptr,
 						    const int src_elmt_stride,
 						    const int dst_elmt_stride,
-						    const int row_iters) const
+						    const int row_iters,
+                                                    const int partial_bytes) const
   {
 #ifdef CUDADMA_DEBUG_ON
     assert(row_iters < GUARD_ZERO(DMA_ROW_ITERS_UPPER));
 #endif
-    BULK_TYPE temp[GUARD_ZERO(DMA_ROW_ITERS_UPPER)];
+    // Note this is an upper bound on the number of registers needed
+    float temp[GUARD_ZERO(DMA_ROW_ITERS_UPPER*ALIGNMENT/sizeof(float))];
     // Perform the loads
-    for (int idx = 0; idx < row_iters; idx++)
+    switch (partial_bytes)
     {
-      perform_load<BULK_TYPE>(src_ptr, &(temp[idx]));
-      src_ptr += src_elmt_stride;
+      case 0:
+        break;
+      case 4:
+        {
+          float *temp_ptr = (float*)temp;
+          for (int idx = 0; idx < row_iters; idx++)
+          {
+            perform_load<float>(src_ptr, temp_ptr);
+            src_ptr += src_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+      case 8:
+        {
+          float2 *temp_ptr = (float2*)temp;
+          for (int idx = 0; idx < row_iters; idx++)
+          {
+            perform_load<float2>(src_ptr, temp_ptr);
+            src_ptr += src_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+      case 12:
+        {
+          float3 *temp_ptr = (float3*)temp;
+          for (int idx = 0; idx < row_iters; idx++)
+          {
+            perform_load<float3>(src_ptr, temp_ptr);
+            src_ptr += src_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+      case 16:
+        {
+          float4 *temp_ptr = (float4*)temp;
+          for (int idx = 0; idx < row_iters; idx++)
+          {
+            perform_load<float4>(src_ptr, temp_ptr);
+            src_ptr += src_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+#ifdef CUDADMA_DEBUG_ON
+      default:
+        printf("Invalid partial bytes size (%d) for strided across.\n" partial_bytes);
+        assert(false);
+#endif
     }
+    // Check for synchronization
     if (DO_SYNC)
       CUDADMA_BASE::wait_for_dma_start();
     // Perform the stores
-    for (int idx = 0; idx < row_iters; idx++)
+    switch (partial_bytes)
     {
-      perform_store<BULK_TYPE>(&(temp[idx]), dst_ptr);
-      dst_ptr += dst_elmt_stride;
+      case 0:
+        break;
+      case 4:
+        {
+          const float *temp_ptr = (const float*)temp;
+          for (int idx = 0; idx < row_iters; idx++)
+          {
+            perform_store<float>(temp_ptr, dst_ptr);
+            dst_ptr += dst_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+      case 8:
+        {
+          const float2 *temp_ptr = (const float2*)temp;
+          for (int idx = 0; idx < row_iters; idx++)
+          {
+            perform_store<float2>(temp_ptr, dst_ptr);
+            dst_ptr += dst_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+      case 12:
+        {
+          const float3 *temp_ptr = (const float3*)temp;
+          for (int idx = 0; idx < row_iters; idx++)
+          {
+            perform_store<float3>(temp_ptr, dst_ptr);
+            dst_ptr += dst_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+      case 16:
+        {
+          const float4 *temp_ptr = (const float4*)temp;
+          for (int idx = 0; idx < row_iters; idx++)
+          {
+            perform_store<float4>(temp_ptr, dst_ptr);
+            dst_ptr += dst_elmt_stride;
+            temp_ptr++;
+          }
+          break;
+        }
+#ifdef CUDADMA_DEBUG_ON
+      default:
+        printf("Invalid partial bytes size (%d) for strided across.\n" partial_bytes);
+        assert(false);
+#endif
     }
   }
 

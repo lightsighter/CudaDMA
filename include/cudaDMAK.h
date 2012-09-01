@@ -161,7 +161,7 @@ protected:
 #define MAX_WARPS_PER_ELMT ((LDS_PER_ELMT+WARP_SIZE-1)/WARP_SIZE)
 #define WARPS_PER_ELMT (SINGLE_WARP ? 1 : \
                         BIG_ELMTS ? NUM_WARPS : \
-                        (NUM_WARPS <= NUM_ELMTS) ? MINIMUM_COVER : \
+                        ((NUM_WARPS/MINIMUM_COVER) <= NUM_ELMTS) ? MINIMUM_COVER : \
                         ((MAX_WARPS_PER_ELMT >= NUM_WARPS) ? NUM_WARPS : MAX_WARPS_PER_ELMT))
 // Figure out how many loads need to be done per thread per element (round up)
 #define LDS_PER_ELMT_PER_THREAD ((LDS_PER_ELMT+(WARPS_PER_ELMT*WARP_SIZE)-1)/(WARPS_PER_ELMT*WARP_SIZE))
@@ -311,6 +311,7 @@ __host__ void print_strided_variables(void)
   PRINT_VAR(NUM_WARPS);
   PRINT_VAR(SINGLE_WARP);
   PRINT_VAR(MAX_WARPS_PER_ELMT);
+  PRINT_VAR(MINIMUM_COVER);
   PRINT_VAR(WARPS_PER_ELMT);
   PRINT_VAR(LDS_PER_ELMT_PER_THREAD);
   PRINT_VAR(ELMT_PER_STEP_PER_THREAD);
@@ -832,7 +833,7 @@ public:
 					     const int row_iters) const
   {
 #ifdef CUDADMA_DEBUG_ON
-    assert(row_iters < GUARD_ZERO(DMA_ROW_ITERS_UPPER));
+    assert(row_iters < GUARD_ZERO(DMA_ROW_ITERS_UPPER*DMA_COL_ITERS));
 #endif
     BULK_TYPE temp[GUARD_ZERO(DMA_ROW_ITERS_UPPER*DMA_COL_ITERS)];
     // Perform loads from the source
@@ -852,8 +853,6 @@ public:
     }
     if (!DMA_ALL_ACTIVE)
     {
-      // Can't have a branch which might split a warp have a sync operation inside it
-      // because this will cause things to deadlock.
       do_strided_across_upper<DO_SYNC,DMA_ROW_ITERS_UPPER>(src_ptr+dma_partial_offset,
                                                            dst_ptr+dma_partial_offset,
                                                            src_elmt_stride, dst_elmt_stride,

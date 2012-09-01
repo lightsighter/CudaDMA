@@ -185,7 +185,7 @@ protected:
 #define HAS_PARTIAL_BYTES (SPLIT_WARP ? HAS_PARTIAL_BYTES_SPLIT : \
                            BIG_ELMTS ? HAS_PARTIAL_BYTES_BIG : HAS_PARTIAL_BYTES_FULL)
 #define HAS_PARTIAL_ELMTS (SPLIT_WARP ? HAS_PARTIAL_ELMTS_SPLIT : \
-                           BIG_ELMTS ? HAS_PARTIAL_BYTES_BIG : HAS_PARTIAL_ELMTS_FULL)
+                           BIG_ELMTS ? HAS_PARTIAL_ELMTS_BIG : HAS_PARTIAL_ELMTS_FULL)
 
 // Finally, let's compute all the initial values based on the things above.
 // First we'll do the split versions

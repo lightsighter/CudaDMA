@@ -105,6 +105,54 @@ protected:
   const int barrier_size;
 };
 
+
+/**
+ * CudaDMAStrided
+ * 
+ * This is a simple description of the strategy for CudaDMAStrided.  There
+ * are three primary cases in which problems are placed depending on the
+ * size of the elements, the number of DMA threads, and the number of 
+ * registers available for outstanding loads.  We define a 'step' to
+ * be the issuing a group of loads up to the maximum number permitted
+ * by the user-specified number of available registers and then 
+ * writing them back into memory.
+ *
+ * The first case that we handle is the 'split' case.  This occurs 
+ * whenever elements require 32 or fewer loads to be transferred.  In
+ * this case we can split a warp across multiple elements.  Warps 
+ * are still split into powers of 2 to avoid warp divergence (see THREADS_PER_ELMT).
+ *
+ * The second case that we handle is the 'big' elements case.  Big
+ * here is a relative term dependent on the number of DMA threads
+ * and the number of permitted outstanding loads.  We define a big
+ * element to be one that can't be loaded by all the DMA warps
+ * in a single step.  In this case we assign all the DMA warps to
+ * a single element at a time and have them perform as many steps
+ * as necessary to load the element.  All the warps then move onto
+ * the next element.
+ *
+ * The final case ('full') handles all the remaining problems.  We know in this
+ * case that we always have enough warps to 'cover' an element: that is
+ * we can always assign enough warps to an element to load it in a single
+ * step.  We assign the minimum number of warps necessary to cover an
+ * element unless this will result in unused warps due to a low element
+ * count.  If we find that there would be unused warps due to a low
+ * element count, we assign as many warps as possible to an element
+ * such that they will all be busy to maximize memory-level parallelism.
+ *
+ * After assigning warps for the 'full' case, warps figure out how
+ * many total loads they need to perform for each element, and then
+ * based on the number of registers they have, they can compute
+ * how many elements they can handle in a single step.
+ *
+ * To optimize we differentiate code paths.  In the case where
+ * an entire transfer can be performed in a single step, we have
+ * a fast path to enable pre-loading of elements into registers.
+ * For cases where we know the exact size of transfers, we
+ * have optimized paths as well.  For the unoptimized path
+ * we still place upper bounds on the number of required registers
+ * to enable the compiler to optimize register allocation.
+ */
 #define MAX_LDS_PER_THREAD (BYTES_PER_THREAD/ALIGNMENT)
 
 #define LDS_PER_ELMT ((BYTES_PER_ELMT+ALIGNMENT-1)/ALIGNMENT)

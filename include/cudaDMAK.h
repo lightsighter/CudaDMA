@@ -43,7 +43,26 @@ __device__ __forceinline__ void ptx_cudaDMA_barrier_nonblocking (const int name,
 #endif
 
 // Enable the use of LDG load operations
-//#define ENABLE_LDG
+#define ENABLE_LDG
+
+#ifdef ENABLE_LDG
+template<typename T>
+__device__ __forceinline__
+T __ldg_intr(const T* ptr)
+{
+  return __ldg(ptr);
+}
+
+// Special case for float3 because the compiler team hates me 
+template<>
+__device__ __forceinline__
+float3 __ldg_intr(const float3* ptr)
+{
+  float3 result; 
+  asm volatile("ld.global.nc.v3.f32 {%0,%1,%2}, [%3];" : "=f"(result.x), "=f"(result.y), "=f"(result.z) : "l"(ptr) : "memory");
+  return result;
+}
+#endif
 
 class cudaDMA
 {
@@ -87,7 +106,7 @@ protected:
   __device__ __forceinline__ void perform_load(const void *src_ptr, void *dst_ptr) const
   {
 #ifdef ENABLE_LDG
-    *((T*)dst_ptr) = __ldg(((T*)src_ptr));
+    *((T*)dst_ptr) = __ldg_intr(((T*)src_ptr));
 #else
     *((T*)dst_ptr) = *((T*)src_ptr);
 #endif
@@ -169,7 +188,6 @@ protected:
 #define ELMT_PER_STEP_SPLIT ((DMA_THREADS/THREADS_PER_ELMT) * MAX_LDS_PER_THREAD)
 #define ROW_ITERS_SPLIT	 (MAX_LDS_PER_THREAD)
 #define HAS_PARTIAL_ELMTS_SPLIT ((NUM_ELMTS % ELMT_PER_STEP_SPLIT) != 0)
-//#define HAS_PARTIAL_BYTES_SPLIT ((LDS_PER_ELMT % THREADS_PER_ELMT) != 0)
 #define HAS_PARTIAL_BYTES_SPLIT ((BYTES_PER_ELMT % (THREADS_PER_ELMT*ALIGNMENT)) != 0)
 #define COL_ITERS_SPLIT  ((LDS_PER_ELMT == THREADS_PER_ELMT) ? 1 : 0)
 #define STEP_ITERS_SPLIT (NUM_ELMTS/ELMT_PER_STEP_SPLIT)
@@ -223,11 +241,8 @@ protected:
 #define ELMT_PER_STEP_FULL (ELMT_PER_STEP_PER_THREAD * (NUM_WARPS/WARPS_PER_ELMT))
 #define ROW_ITERS_FULL (ELMT_PER_STEP_PER_THREAD)
 #define HAS_PARTIAL_ELMTS_FULL ((NUM_ELMTS % ELMT_PER_STEP_FULL) != 0)
-//#define HAS_PARTIAL_BYTES_FULL ((LDS_PER_ELMT % (WARPS_PER_ELMT*WARP_SIZE)) != 0)
 #define HAS_PARTIAL_BYTES_FULL ((BYTES_PER_ELMT % (WARPS_PER_ELMT*WARP_SIZE*ALIGNMENT)) != 0)
 #define COL_ITERS_FULL (LDS_PER_ELMT/(WARPS_PER_ELMT*WARP_SIZE))
-//#define STEP_ITERS_FULL ((NUM_ELMTS >= ELMT_PER_STEP_FULL) ? NUM_ELMTS/ELMT_PER_STEP_FULL : \
-//                                                             NUM_ELMTS/(NUM_WARPS/WARPS_PER_ELMT))
 #define STEP_ITERS_FULL (NUM_ELMTS/ELMT_PER_STEP_FULL)
 
 #define HAS_PARTIAL_BYTES (SPLIT_WARP ? HAS_PARTIAL_BYTES_SPLIT : \

@@ -1191,8 +1191,9 @@ protected:
  */
 
 #define CUDADMA_STRIDED_BASE cudaDMAStrided<DO_SYNC_TOP,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
+#define MIN_UPDATE(type) (((sizeof(type) % ALIGNMENT) == 0) ? sizeof(type) : ALIGNMENT*((sizeof(type)+ALIGNMENT-1)/ALIGNMENT))
 
-template<bool DO_SYNC_TOP, int ALIGNMENT, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
+template<bool DO_SYNC_TOP, typename ALIGNMENT_TYPE, int ALIGNMENT, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
 class cudaDMAStridedTwoPhase : public CUDADMA_STRIDED_BASE
 {
 public:
@@ -1302,18 +1303,18 @@ protected: // begin xfer functions
   __device__ __forceinline__ void execute_begin_xfer(const void *RESTRICT src_ptr)
   {
     // Note we can only issue at most one step here so we have to save the src_off_ptr
-    src_off_ptr = ((const char*)src_ptr) + this->dma_src_offset;
+    this->dma_src_off_ptr = ((const char*)src_ptr) + this->dma_src_offset;
     if (DMA_IS_SPLIT)
     {
       if (DMA_STEP_ITERS_SPLIT == 0)
       {
 	load_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
-				DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(src_off_ptr);
+				DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(this->dma_src_off_ptr);
       }
       else
       {
 	load_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,false/*partial rows*/,
-				DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(src_off_ptr);
+				DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(this->dma_src_off_ptr);
       }
     }
     else if (DMA_IS_BIG)
@@ -1328,12 +1329,12 @@ protected: // begin xfer functions
 	if (DMA_STEP_ITERS_FULL == 0)
 	{
 	  load_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
-	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr);
+	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(this->dma_src_off_ptr);
 	}
 	else
 	{
 	  load_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,false/*partial rows*/,
-	   			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr);
+	   			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(this->dma_src_off_ptr);
 	}
       }
       else if (this->dma_active_warp)
@@ -1341,12 +1342,12 @@ protected: // begin xfer functions
 	if (DMA_STEP_ITERS_FULL == 0)
 	{
 	  load_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
-	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr);
+	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(this->dma_src_off_ptr);
 	}
 	else
 	{
 	  load_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,false/*partial rows*/,
-	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr);
+	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(this->dma_src_off_ptr);
 	}
       }
     }
@@ -1400,7 +1401,7 @@ protected: // begin xfer functions
       const char *src_col_ptr = src_row_ptr;
       for (int col = 0; col < DMA_COL_ITERS; col++)
       {
-        CUDADMA_BASE::perform_load<BULK_TYPE>(src_col_ptr, &(buffer[idx*sizeof(BULK_TYPE)]));
+        CUDADMA_BASE::perform_load<BULK_TYPE>(src_col_ptr, &(buffer[idx]));
 	idx++;
 	src_col_ptr += intra_elmt_stride;
       }
@@ -1410,7 +1411,7 @@ protected: // begin xfer functions
     {
       load_across<DMA_ROW_ITERS>(src_ptr+this->dma_partial_offset,
                          src_elmt_stride, partial_bytes,
-                         &(buffer[GUARD_OVERFLOW(DMA_ROW_ITERS*DMA_COL_ITERS*sizeof(BULK_TYPE),BYTES_PER_THREAD)]));
+                         &(buffer[GUARD_OVERFLOW(DMA_ROW_ITERS*DMA_COL_ITERS,BYTES_PER_THREAD/ALIGNMENT)]));
     }
   }
 
@@ -1426,7 +1427,7 @@ protected: // begin xfer functions
       const char *src_col_ptr = src_row_ptr;
       for (int col = 0; col < DMA_COL_ITERS; col++)
       {
-        CUDADMA_BASE::perform_load<BULK_TYPE>(src_col_ptr, &(buffer[idx*sizeof(BULK_TYPE)]));
+        CUDADMA_BASE::perform_load<BULK_TYPE>(src_col_ptr, &(buffer[idx]));
 	idx++;
 	src_col_ptr += intra_elmt_stride;
       }
@@ -1436,7 +1437,7 @@ protected: // begin xfer functions
     {
       load_across_upper<DMA_ROW_ITERS_UPPER>(src_ptr+this->dma_partial_offset,
 			     src_elmt_stride, partial_bytes,
-			     &(buffer[row_iters*DMA_COL_ITERS*sizeof(BULK_TYPE)]), row_iters);
+			     &(buffer[row_iters*DMA_COL_ITERS]), row_iters);
     }
   }
 
@@ -1456,7 +1457,7 @@ protected: // begin xfer functions
 	  {
             CUDADMA_BASE::perform_load<float>(src_ptr, temp_ptr);
 	    src_ptr += src_elmt_stride;
-	    temp_ptr += sizeof(float);
+	    temp_ptr += MIN_UPDATE(float);
 	  }
 	  break;
 	}
@@ -1466,7 +1467,7 @@ protected: // begin xfer functions
 	  {
 	    CUDADMA_BASE::perform_load<float2>(src_ptr, temp_ptr);
 	    src_ptr += src_elmt_stride;
-	    temp_ptr += sizeof(float2);
+	    temp_ptr += MIN_UPDATE(float2);
 	  }
 	  break;
 	}
@@ -1476,7 +1477,7 @@ protected: // begin xfer functions
 	  {
 	    CUDADMA_BASE::perform_load<float3>(src_ptr, temp_ptr);
 	    src_ptr += src_elmt_stride;
-	    temp_ptr += sizeof(float3);
+	    temp_ptr += MIN_UPDATE(float3); 
 	  }
 	  break;
 	}
@@ -1486,7 +1487,7 @@ protected: // begin xfer functions
 	  {
 	    CUDADMA_BASE::perform_load<float4>(src_ptr, temp_ptr);
 	    src_ptr += src_elmt_stride;
-	    temp_ptr += sizeof(float4);
+	    temp_ptr += MIN_UPDATE(float4);
 	  }
 	  break;
 	}
@@ -1514,7 +1515,7 @@ protected: // begin xfer functions
 	  {
 	    CUDADMA_BASE::perform_load<float>(src_ptr, temp_ptr);
 	    src_ptr += src_elmt_stride;
-	    temp_ptr += sizeof(float);
+	    temp_ptr += MIN_UPDATE(float);
 	  }
 	  break;
 	}
@@ -1524,7 +1525,7 @@ protected: // begin xfer functions
 	  {
 	    CUDADMA_BASE::perform_load<float2>(src_ptr, temp_ptr);
 	    src_ptr += src_elmt_stride;
-	    temp_ptr += sizeof(float2);
+	    temp_ptr += MIN_UPDATE(float2);
 	  }
 	  break;
 	}
@@ -1534,7 +1535,7 @@ protected: // begin xfer functions
 	  {
 	    CUDADMA_BASE::perform_load<float3>(src_ptr, temp_ptr);
 	    src_ptr += src_elmt_stride;
-	    temp_ptr += sizeof(float3);
+	    temp_ptr += MIN_UPDATE(float3); 
 	  }
 	  break;
 	}
@@ -1544,7 +1545,7 @@ protected: // begin xfer functions
 	  {
 	    CUDADMA_BASE::perform_load<float4>(src_ptr, temp_ptr);
 	    src_ptr += src_elmt_stride;
-	    temp_ptr += sizeof(float4);
+	    temp_ptr += MIN_UPDATE(float4);
 	  }
 	  break;
 	}
@@ -1578,22 +1579,22 @@ protected: // commit xfer functions
       {
         store_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,false/*partial rows*/,
 				DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(dst_off_ptr);
-	src_off_ptr += this->dma_src_step_stride;
+	this->dma_src_off_ptr += this->dma_src_step_stride;
 	dst_off_ptr += this->dma_dst_step_stride;
 	// Only need to do N-1 iterations since we already did the first one
 	for (int i = 0; i < (DMA_STEP_ITERS_SPLIT-1); i++)
 	{
           CUDADMA_STRIDED_BASE::template all_partial_cases<BULK_TYPE,false/*do sync*/,
                                 DMA_PARTIAL_BYTES,false/*partial rows*/,
-	  			DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(src_off_ptr,dst_off_ptr);
-	  src_off_ptr += this->dma_src_step_stride;
+	  			DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(this->dma_src_off_ptr, dst_off_ptr);
+	  this->dma_src_off_ptr += this->dma_src_step_stride;
 	  dst_off_ptr += this->dma_dst_step_stride;
         }
 	if (DMA_PARTIAL_ROWS)
 	{
           CUDADMA_STRIDED_BASE::template all_partial_cases<BULK_TYPE,false/*do sync*/,
                                 DMA_PARTIAL_BYTES,true/*partial rows*/,
-                                DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(src_off_ptr, dst_off_ptr);
+                                DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(this->dma_src_off_ptr, dst_off_ptr);
 	}
       }
     }
@@ -1603,8 +1604,8 @@ protected: // commit xfer functions
       {
         CUDADMA_STRIDED_BASE::template do_copy_elmt<BULK_TYPE,DMA_MAX_ITERS_BIG,
                         DMA_PART_ITERS_BIG,DMA_PARTIAL_ROWS,DMA_PARTIAL_BYTES>
-            (src_off_ptr, dst_off_ptr, this->dma_intra_elmt_stride, this->dma_partial_bytes);
-        src_off_ptr += this->dma_src_elmt_stride;
+            (this->dma_src_off_ptr, dst_off_ptr, this->dma_intra_elmt_stride, this->dma_partial_bytes);
+        this->dma_src_off_ptr += this->dma_src_elmt_stride;
         dst_off_ptr += this->dma_dst_elmt_stride;
       }
     }
@@ -1621,22 +1622,22 @@ protected: // commit xfer functions
 	{
 	  store_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,false/*partial rows*/,
 	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(dst_off_ptr);
-	  src_off_ptr += this->dma_src_step_stride;
+	  this->dma_src_off_ptr += this->dma_src_step_stride;
 	  dst_off_ptr += this->dma_dst_step_stride;
 	  // Only need to handle N-1 cases now
 	  for (int i = 0; i < (DMA_STEP_ITERS_FULL-1); i++)
 	  {
             CUDADMA_STRIDED_BASE::template all_partial_cases<BULK_TYPE,false/*do sync*/,
                                 DMA_PARTIAL_BYTES,false/*partial rows*/,
-	    			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(this->src_off_ptr,dst_off_ptr);
-	    src_off_ptr += this->dma_src_step_stride;
+	    			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(this->dma_src_off_ptr,dst_off_ptr);
+	    this->dma_src_off_ptr += this->dma_src_step_stride;
 	    dst_off_ptr += this->dma_dst_step_stride;
 	  }
 	  if (DMA_PARTIAL_ROWS)
 	  {
             CUDADMA_STRIDED_BASE::template all_partial_cases<BULK_TYPE,false/*do sync*/,
                                 DMA_PARTIAL_BYTES,true/*partial rows*/,
-	    			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(this->src_off_ptr, dst_off_ptr);
+	    			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(this->dma_src_off_ptr, dst_off_ptr);
 	  }
 	}
       }
@@ -1651,22 +1652,22 @@ protected: // commit xfer functions
 	{
 	  store_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,false/*partial rows*/,
 	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(dst_off_ptr);
-	  src_off_ptr += this->dma_src_step_stride;
+	  this->dma_src_off_ptr += this->dma_src_step_stride;
 	  dst_off_ptr += this->dma_dst_step_stride;
 	  // Only need to handle N-1 cases now
 	  for (int i = 0; i < (DMA_STEP_ITERS_FULL-1); i++)
 	  {
             CUDADMA_STRIDED_BASE::template all_partial_cases<BULK_TYPE,false/*do sync*/,
                                 DMA_PARTIAL_BYTES,false/*partial rows*/,
-	    			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(this->src_off_ptr,dst_off_ptr);
-	    src_off_ptr += this->dma_src_step_stride;
+	    			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(this->dma_src_off_ptr, dst_off_ptr);
+	    this->dma_src_off_ptr += this->dma_src_step_stride;
 	    dst_off_ptr += this->dma_dst_step_stride;
 	  }
 	  if (DMA_PARTIAL_ROWS)
 	  {
             CUDADMA_STRIDED_BASE::template all_partial_cases<BULK_TYPE,false/*do sync*/,
                                 DMA_PARTIAL_BYTES,true/*partial rows*/,
-	    			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(this->src_off_ptr, dst_off_ptr);
+	    			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(this->dma_src_off_ptr, dst_off_ptr);
 	  }
 	}
       }
@@ -1722,7 +1723,7 @@ protected: // commit xfer functions
       char *dst_col_ptr = dst_row_ptr;
       for (int col = 0; col < DMA_COL_ITERS; col++)
       {
-        CUDADMA_BASE::perform_store<BULK_TYPE>(&(buffer[idx*sizeof(BULK_TYPE)]), dst_col_ptr);
+        CUDADMA_BASE::perform_store<BULK_TYPE>(&(buffer[idx]), dst_col_ptr);
 	idx++;
 	dst_col_ptr += intra_elmt_stride;
       }
@@ -1732,7 +1733,7 @@ protected: // commit xfer functions
     { 
       store_across<DMA_ROW_ITERS>(dst_ptr+this->dma_partial_offset,
 			      dst_elmt_stride,partial_bytes,
-			      &(buffer[GUARD_OVERFLOW(DMA_ROW_ITERS*DMA_COL_ITERS*sizeof(BULK_TYPE),BYTES_PER_THREAD)]));
+			      &(buffer[GUARD_OVERFLOW(DMA_ROW_ITERS*DMA_COL_ITERS,BYTES_PER_THREAD/ALIGNMENT)]));
     }
   }
 
@@ -1748,7 +1749,7 @@ protected: // commit xfer functions
       char *dst_col_ptr = dst_row_ptr;
       for (int col = 0; col < DMA_COL_ITERS; col++)
       {
-        CUDADMA_BASE::perform_store<BULK_TYPE>(&(buffer[idx*sizeof(BULK_TYPE)]), dst_col_ptr);
+        CUDADMA_BASE::perform_store<BULK_TYPE>(&(buffer[idx]), dst_col_ptr);
 	idx++;
 	dst_col_ptr += intra_elmt_stride;
       }
@@ -1758,7 +1759,7 @@ protected: // commit xfer functions
     { 
       store_across_upper<DMA_ROW_ITERS_UPPER>(dst_ptr+this->dma_partial_offset,
 			      dst_elmt_stride,partial_bytes,
-			      &(buffer[row_iters*DMA_COL_ITERS*sizeof(BULK_TYPE)]),
+			      &(buffer[row_iters*DMA_COL_ITERS]),
 			      row_iters);
     } 
   }
@@ -1778,7 +1779,7 @@ protected: // commit xfer functions
 	  {
             CUDADMA_BASE::perform_store<float>(temp_ptr, dst_ptr);
 	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += sizeof(float);
+	    temp_ptr += MIN_UPDATE(float);
 	  }
 	  break;
 	}
@@ -1788,7 +1789,7 @@ protected: // commit xfer functions
 	  {
             CUDADMA_BASE::perform_store<float2>(temp_ptr, dst_ptr);
 	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += sizeof(float2);
+	    temp_ptr += MIN_UPDATE(float2);
 	  }
 	  break;
 	}
@@ -1798,7 +1799,7 @@ protected: // commit xfer functions
 	  {
             CUDADMA_BASE::perform_store<float3>(temp_ptr, dst_ptr);
 	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += sizeof(float3);
+	    temp_ptr += MIN_UPDATE(float3); 
 	  }
 	  break;
 	}
@@ -1808,7 +1809,7 @@ protected: // commit xfer functions
 	  {
             CUDADMA_BASE::perform_store<float4>(temp_ptr, dst_ptr);
 	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += sizeof(float4);
+	    temp_ptr += MIN_UPDATE(float4);
 	  }
 	  break;
 	}
@@ -1836,7 +1837,7 @@ protected: // commit xfer functions
 	  {
             CUDADMA_BASE::perform_store<float>(temp_ptr, dst_ptr);
 	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += sizeof(float);
+	    temp_ptr += MIN_UPDATE(float);
 	  }
 	  break;
 	}
@@ -1846,7 +1847,7 @@ protected: // commit xfer functions
 	  {
             CUDADMA_BASE::perform_store<float2>(temp_ptr, dst_ptr);
 	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += sizeof(float2);
+	    temp_ptr += MIN_UPDATE(float2);
 	  }
 	  break;
 	}
@@ -1856,7 +1857,7 @@ protected: // commit xfer functions
 	  {
             CUDADMA_BASE::perform_store<float3>(temp_ptr, dst_ptr);
 	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += sizeof(float3);
+	    temp_ptr += MIN_UPDATE(float3); 
 	  }
 	  break;
 	}
@@ -1866,7 +1867,7 @@ protected: // commit xfer functions
 	  {
             CUDADMA_BASE::perform_store<float4>(temp_ptr, dst_ptr);
 	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += sizeof(float4);
+	    temp_ptr += MIN_UPDATE(float4);
 	  }
 	  break;
 	}
@@ -1878,8 +1879,8 @@ protected: // commit xfer functions
     }
   }
 protected:
-  const char * src_off_ptr;
-  char buffer[GUARD_ZERO(BYTES_PER_THREAD)];
+  const char * dma_src_off_ptr;
+  ALIGNMENT_TYPE buffer[GUARD_ZERO(BYTES_PER_THREAD/ALIGNMENT)];
 };
 
 

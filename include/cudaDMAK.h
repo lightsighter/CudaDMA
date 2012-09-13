@@ -1,5 +1,5 @@
 /*
- *  Copyright 2010 NVIDIA Corporation
+ *  Copyright 2012 NVIDIA Corporation
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -488,7 +488,7 @@ public:
 #endif
     }
   }
-
+protected:
   template<typename BULK_TYPE, bool DMA_IS_SPLIT, bool DMA_IS_BIG,
            int DMA_STEP_ITERS_SPLIT, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_SPLIT,
            int DMA_STEP_ITERS_BIG,   int DMA_MAX_ITERS_BIG,   int DMA_PART_ITERS_BIG,
@@ -1168,7 +1168,7 @@ public:
     }
   }
 
-private:
+protected:
   const unsigned int dma_src_offset;
   const unsigned int dma_dst_offset;
   const unsigned int dma_src_step_stride;
@@ -1181,4 +1181,699 @@ private:
   const unsigned int dma_partial_elmts;
   const bool         dma_active_warp;
 };
+
+/**
+ * This is a different version of CudaDMAStrided in the new model that instead of having
+ * a single execute_dma call will break the code into separate begin_xfer and commit_xfer
+ * calls that will break the transfer into two parts: one for issuing the loads and
+ * one for writing into shared memory.
+ */
+
+#if 0
+template<bool DO_SYNC_TOP, int ALIGNMENT, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
+class cudaDMAStridedTwoPhase : public cudaDMAStrided 
+{
+public:
+  // Constructor for when dst_stride == BYTES_PER_ELMT
+  __device__ cudaDMAStridedAlt (const int dmaID,
+			     const int num_compute_threads,
+			     const int dma_threadIdx_start,
+			     const int el_stride)
+    : cudaDMAStrided<DO_SYNC_TOP,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
+		(dmaID,num_compute_threads,dma_threadIdx_start,el_stride)
+  {
+  }
+
+  __device__ cudaDMAStrided (const int dmaID,
+  			     const int num_compute_threads,
+			     const int dma_threadIdx_start,
+			     const int src_stride,
+			     const int dst_stride)
+    : cudaDMAStrided<DO_SYNC_TOP,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
+    		(dmaID,num_compute_threads,dma_threadIdx_start,src_stride,dst_stride)
+  {
+  }
+public:
+  __device__ __forceinline__ void begin_xfer_async(const void *RESTRICT src_ptr)  
+  {
+    switch (ALIGNMENT)
+    {
+      case 4:
+      	{
+          execute_begin_xfer<float,SPLIT_WARP,BIG_ELMTS,
+                                  STEP_ITERS_SPLIT,ROW_ITERS_SPLIT,COL_ITERS_SPLIT,
+                                  STEP_ITERS_BIG,MAX_ITERS_BIG,PART_ITERS_BIG,
+	  			  STEP_ITERS_FULL,ROW_ITERS_FULL,COL_ITERS_FULL,
+				  HAS_PARTIAL_BYTES,HAS_PARTIAL_ELMTS,ALL_WARPS_ACTIVE>(src_ptr,dst_ptr);
+	  break;
+	}
+    case 8:
+      	{
+	  execute_begin_xfer<float2,SPLIT_WARP,BIG_ELMTS,
+                                  STEP_ITERS_SPLIT,ROW_ITERS_SPLIT,COL_ITERS_SPLIT,
+                                  STEP_ITERS_BIG,MAX_ITERS_BIG,PART_ITERS_BIG,
+	  			  STEP_ITERS_FULL,ROW_ITERS_FULL,COL_ITERS_FULL,
+				  HAS_PARTIAL_BYTES,HAS_PARTIAL_ELMTS,ALL_WARPS_ACTIVE>(src_ptr,dst_ptr);
+	  break;
+	}
+    case 16:
+      	{
+	  execute_begin_xfer<float4,SPLIT_WARP,BIG_ELMTS,
+                                  STEP_ITERS_SPLIT,ROW_ITERS_SPLIT,COL_ITERS_SPLIT,
+                                  STEP_ITERS_BIG,MAX_ITERS_BIG,PART_ITERS_BIG,
+	  			  STEP_ITERS_FULL,ROW_ITERS_FULL,COL_ITERS_FULL,
+				  HAS_PARTIAL_BYTES,HAS_PARTIAL_ELMTS,ALL_WARPS_ACTIVE>(src_ptr,dst_ptr);
+	  break;
+	}
+#ifdef CUDADMA_DEBUG_ON
+	  default:
+		printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
+		assert(false);
+		break;
+#endif
+
+  }
+
+  __device__ __forceinline__ void wait_commit_xfer(void *RESTRICT dst_ptr) 
+  {
+    switch (ALIGNMENT)
+    {
+      case 4:
+      	{
+          execute_commit_xfer<float,SPLIT_WARP,BIG_ELMTS,
+                                  STEP_ITERS_SPLIT,ROW_ITERS_SPLIT,COL_ITERS_SPLIT,
+                                  STEP_ITERS_BIG,MAX_ITERS_BIG,PART_ITERS_BIG,
+	  			  STEP_ITERS_FULL,ROW_ITERS_FULL,COL_ITERS_FULL,
+				  HAS_PARTIAL_BYTES,HAS_PARTIAL_ELMTS,ALL_WARPS_ACTIVE>(dst_ptr);
+	  break;
+	}
+    case 8:
+      	{
+	  execute_commit_xfer<float2,SPLIT_WARP,BIG_ELMTS,
+                                  STEP_ITERS_SPLIT,ROW_ITERS_SPLIT,COL_ITERS_SPLIT,
+                                  STEP_ITERS_BIG,MAX_ITERS_BIG,PART_ITERS_BIG,
+	  			  STEP_ITERS_FULL,ROW_ITERS_FULL,COL_ITERS_FULL,
+				  HAS_PARTIAL_BYTES,HAS_PARTIAL_ELMTS,ALL_WARPS_ACTIVE>(dst_ptr);
+	  break;
+	}
+    case 16:
+      	{
+	  execute_commit_xfer<float4,SPLIT_WARP,BIG_ELMTS,
+                                  STEP_ITERS_SPLIT,ROW_ITERS_SPLIT,COL_ITERS_SPLIT,
+                                  STEP_ITERS_BIG,MAX_ITERS_BIG,PART_ITERS_BIG,
+	  			  STEP_ITERS_FULL,ROW_ITERS_FULL,COL_ITERS_FULL,
+				  HAS_PARTIAL_BYTES,HAS_PARTIAL_ELMTS,ALL_WARPS_ACTIVE>(dst_ptr);
+	  break;
+	}
+#ifdef CUDADMA_DEBUG_ON
+	  default:
+		printf("Invalid ALIGNMENT %d must be one of (4,8,16)\n",ALIGNMENT);
+		assert(false);
+		break;
+#endif
+  }
+protected: // begin xfer functions
+  template<typename BULK_TYPE, bool DMA_IS_SPLIT, bool DMA_IS_BIG,
+           int DMA_STEP_ITERS_SPLIT, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_SPLIT,
+           int DMA_STEP_ITERS_BIG,   int DMA_MAX_ITERS_BIG,   int DMA_PART_ITERS_BIG,
+           int DMA_STEP_ITERS_FULL,  int DMA_ROW_ITERS_FULL,  int DMA_COL_ITERS_FULL,
+	   bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS, bool DMA_ALL_WARPS_ACTIVE>
+  __device__ __forceinline__ void execute_begin_xfer(const void *RESTRICT src_ptr)
+  {
+    // Note we can only issue at most one step here so we have to save the src_off_ptr
+    src_off_ptr = ((const char*)src_ptr) + dma_src_offset;
+    if (DMA_IS_SPLIT)
+    {
+      if (DMA_STEP_ITERS_SPLIT == 0)
+      {
+	load_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
+				DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(src_off_ptr);
+      }
+      else
+      {
+	load_all_partial_case<BULK_TYPE,DMA_PARTIAL_BYTES,false/*partial rows*/,
+				DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(src_off_ptr);
+      }
+    }
+    else if (DMA_IS_BIG)
+    {
+      // No optimized case here we have at least one full column iteration to perform
+      // so we'll just wait until we can do everything
+    }
+    else // Not split and not big
+    {
+      if (DMA_ALL_WARPS_ACTIVE)
+      {
+	if (DMA_STEP_ITERS_FULL == 0)
+	{
+	  load_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
+	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr);
+	}
+	else
+	{
+	  load_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,false/*partial rows*/,
+	   			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr);
+	}
+      }
+      else if (dma_active_warp)
+      {
+	if (DMA_STEP_ITERS_FULL == 0)
+	{
+	  load_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
+	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr);
+	}
+	else
+	{
+	  load_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,false/*partial rows*/,
+	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr);
+	}
+      }
+    }
+  }
+
+  template<typename BULK_TYPE, bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS,
+  		int DMA_ROW_ITERS, int DMA_COL_ITERS>
+  __device__ __forceinline__ void load_all_partial_cases(const char *RESTRICT src_ptr)
+  {
+    if (!DMA_PARTIAL_BYTES)
+    {
+      if (!DMA_PARTIAL_ROWS)
+      {
+	load_strided<BULK_TYPE,true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS>
+			(src_ptr, dma_src_elmt_stride,
+			 dma_intra_elmt_stride, 0/*no partial bytes*/);
+      }
+      else
+      {
+	load_strided_upper<BULK_TYPE,true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,
+			(src_ptr, dma_src_elmt_stride,
+			 dma_intra_elmt_stride, 0/*no partial bytes*/, dma_partial_elmts);
+      }
+    }
+    else
+    {
+      if (!DMA_PARTIAL_ROWS)
+      {
+        load_strided<BULK_TYPE,false/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS>
+			(src_ptr, dma_src_elmt_stride, 
+			 dma_intra_elmt_stride, 0/*no partial bytes*/);
+      }
+      else
+      {
+	load_strided_upper<BULK_TYPE,true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,
+			(src_ptr, dma_src_elmt_stride, 
+			 dma_intra_elmt_stride, 0/*no partial bytes*/, dma_partial_elmts);
+      }
+    }
+  }
+
+  template<typename BULK_TYPE, bool DMA_ALL_ACTIVE, int DMA_ROW_ITERS, int DMA_COL_ITERS>
+  __device__ __forceinline__ void load_strided(const char *RESTRICT src_ptr,
+  				  	       const int src_elmt_stride, 
+					       const int intra_elmt_stride, const int partial_bytes)
+  {
+    unsigned idx = 0;
+    const char *src_row_ptr = src_ptr;
+    for (int row = 0; row < DMA_ROW_ITERS; row++)
+    {
+      const char *src_col_ptr = src_row_ptr;
+      for (int col = 0; col < DMA_COL_ITERS; col++)
+      {
+	perform_load<BULK_TYPE>(src_col_ptr, &(temp[idx*sizeof(BULK_TYPE)/sizeof(float)]));
+	idx++;
+	src_col_ptr += intra_elmt_stride;
+      }
+      src_row_ptr += src_elmt_stride;
+    }
+    if (!DMA_ALL_ACTIVE)
+    {
+      load_across<DMA_ROW_ITERS>(src_ptr+dma_partial_offset,
+      				 src_elmt_stride, partial_bytes,
+				 &(temp[DMA_ROW_ITERS*DMA_COL_ITERS*sizeof(BULK_TYPE)/sizeof(float)]));
+    }
+  }
+
+  template<typename BULK_TYPE, bool DMA_ALL_ACTIVE, int DMA_ROW_ITERS_UPPER, int DMA_COL_ITERS>
+  __device__ __forceinline__ void load_strided_upper(const char *RESTRICT src_ptr,
+  						const int src_elmt_stride, const int intra_elmt_stride,
+						const int partial_bytes, const int row_iters)
+  {
+    unsigned idx = 0;
+    const char *src_row_ptr = src_ptr;
+    for (int row = 0; row < row_iters; row++)
+    {
+      const char *src_col_ptr = src_row_ptr;
+      for (int col = 0; col < DMA_COL_ITERS; col++)
+      {
+	perform_load<BULK_TYPE>(src_col_ptr, &(temp[idx*sizeof(BULK_TYPE)/sizeof(float)]));
+	idx++;
+	src_col_ptr += intra_elmt_stride;
+      }
+      src_row_ptr += src_elmt_stride;
+    }
+    if (!DMA_ALL_ACTIVE)
+    {
+      load_across_upper<DMA_ROW_ITERS_UPPER>(src_ptr+dma_partial_offset,
+			     src_elmt_stride, partial_bytes,
+			     row_iters, &(temp[row_iters*DMA_COL_ITERS*sizeof(BULK_TYPE)/sizeof(float)]));
+    }
+  }
+
+  template<int DMA_ROW_ITERS>
+  __device__ __forceinline__ void load_across(const char *RESTRICT src_ptr,
+  					      const int src_elmt_stride, const int partial_bytes,
+					      void *temp)
+  {
+    char *temp_ptr = (char*)temp;
+    switch (partial_bytes)
+    {
+      case 0:
+        break;
+      case 4:
+	{
+	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+	  {
+	    perform_load<float>(src_ptr, temp_ptr);
+	    src_ptr += src_elmt_stride;
+	    temp_ptr += sizeof(float);
+	  }
+	  break;
+	}
+      case 8:
+	{
+	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+	  {
+	    perform_load<float2>(src_ptr, temp_ptr);
+	    src_ptr += src_elmt_stride;
+	    temp_ptr += sizeof(float2);
+	  }
+	  break;
+	}
+      case 12:
+      	{
+	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+	  {
+	    perform_load<float3>(src_ptr, temp_ptr);
+	    src_ptr += src_elmt_stride;
+	    temp_ptr += sizeof(float3);
+	  }
+	  break;
+	}
+      case 16:
+        {
+	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+	  {
+	    perform_load<float4>(src_ptr, temp_ptr);
+	    src_ptr += src_elmt_stride;
+	    temp_ptr += sizeof(float4);
+	  }
+	  break;
+	}
+#ifdef CUDADMA_DEBUG_ON
+      default:
+        printf("Invalid partial bytes size (%d) for strided across.\n" partial_bytes);
+        assert(false);
+#endif
+    }
+  }
+
+  template<int DMA_ROW_ITERS>
+  __device__ __forceinline__ void load_across_upper(const char *RESTRICT src_ptr,
+  					      const int src_elmt_stride, const int partial_bytes,
+					      void *temp, const int row_iters)
+  {
+    char *temp_ptr = (char*)temp;
+    switch (partial_bytes)
+    {
+      case 0:
+        break;
+      case 4:
+	{
+	  for (int idx = 0; idx < row_iters; idx++)
+	  {
+	    perform_load<float>(src_ptr, temp_ptr);
+	    src_ptr += src_elmt_stride;
+	    temp_ptr += sizeof(float);
+	  }
+	  break;
+	}
+      case 8:
+	{
+	  for (int idx = 0; idx < row_iters; idx++)
+	  {
+	    perform_load<float2>(src_ptr, temp_ptr);
+	    src_ptr += src_elmt_stride;
+	    temp_ptr += sizeof(float2);
+	  }
+	  break;
+	}
+      case 12:
+      	{
+	  for (int idx = 0; idx < row_iters; idx++)
+	  {
+	    perform_load<float3>(src_ptr, temp_ptr);
+	    src_ptr += src_elmt_stride;
+	    temp_ptr += sizeof(float3);
+	  }
+	  break;
+	}
+      case 16:
+        {
+	  for (int idx = 0; idx < row_iters; idx++)
+	  {
+	    perform_load<float4>(src_ptr, temp_ptr);
+	    src_ptr += src_elmt_stride;
+	    temp_ptr += sizeof(float4);
+	  }
+	  break;
+	}
+#ifdef CUDADMA_DEBUG_ON
+      default:
+        printf("Invalid partial bytes size (%d) for strided across.\n" partial_bytes);
+        assert(false);
+#endif
+    }
+  }
+
+protected: // commit xfer functions
+  template<typename BULK_TYPE, bool DMA_IS_SPLIT, bool DMA_IS_BIG,
+           int DMA_STEP_ITERS_SPLIT, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_SPLIT,
+           int DMA_STEP_ITERS_BIG,   int DMA_MAX_ITERS_BIG,   int DMA_PART_ITERS_BIG,
+           int DMA_STEP_ITERS_FULL,  int DMA_ROW_ITERS_FULL,  int DMA_COL_ITERS_FULL,
+	   bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS, bool DMA_ALL_WARPS_ACTIVE>
+  __device__ __forceinline__ void execute_commit_xfer(void *RESTRICT src_ptr) 
+  {
+    char * dst_off_ptr = ((char*)dst_ptr) + dma_dst_offset;
+    if (DO_SYNC_TOP)
+        CUDADMA_BASE::wait_for_dma_start();
+    if (DMA_IS_SPLIT)
+    {
+      if (DMA_STEP_ITERS_SPLIT == 0)
+      {
+	store_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
+				DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(src_off_ptr,dst_off_ptr);
+      }
+      else
+      {
+        store_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,false/*partial rows*/,
+				DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(src_off_ptr,dst_off_ptr);
+	src_off_ptr += dma_src_step_stride;
+	dst_off_ptr += dma_dst_step_stride;
+	// Only need to do N-1 iterations since we already did the first one
+	for (int i = 0; i < (DMA_STEP_ITERS_SPLIT-1); i++)
+	{
+	  all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,false/*partial rows*/,
+	  			DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(src_off_ptr,dst_off_ptr);
+	  src_off_ptr += dma_src_step_stride;
+	  dst_off_ptr += dma_dst_step_stride;
+        }
+	if (DMA_PARTIAL_ROWS)
+	{
+	  all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,true/*partial rows*/,
+                                DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT>(src_off_ptr, dst_off_ptr);
+	}
+      }
+    }
+    else if (DMA_IS_BIG)
+    {
+      for (int i = 0; i < DMA_STEP_ITERS_BIG; i++)
+      {
+        do_copy_elmt<BULK_TYPE,DMA_MAX_ITERS_BIG,DMA_PART_ITERS_BIG,DMA_PARTIAL_ROWS,DMA_PARTIAL_BYTES>
+            (src_off_ptr, dst_off_ptr, dma_intra_elmt_stride, dma_partial_bytes);
+        src_off_ptr += dma_src_elmt_stride;
+        dst_off_ptr += dma_dst_elmt_stride;
+      }
+    }
+    else
+    {
+      if (DMA_ALL_WARPS_ACTIVE)
+      {
+	if (DMA_STEP_ITERS_FULL == 0)
+	{
+	  store_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
+	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(dst_off_ptr);
+	}
+	else
+	{
+	  store_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,false/*partial rows*/,
+	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(dst_off_ptr);
+	  src_off_ptr += dma_src_step_stride;
+	  dst_off_ptr += dma_dst_step_stride;
+	  // Only need to handle N-1 cases now
+	  for (int i = 0; i < (DMA_STEP_ITERS_FULL-1); i++)
+	  {
+	    all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,false/*partial rows*/,
+	    			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr,dst_off_ptr);
+	    src_off_ptr += dma_src_step_stride;
+	    dst_off_ptr += dma_dst_step_stride;
+	  }
+	  if (DMA_PARTIAL_ROWS)
+	  {
+	    all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,true/*partial rows*/,
+	    			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr, dst_off_ptr);
+	  }
+	}
+      }
+      else if (dma_warp_active)
+      {
+	if (DMA_STEP_ITERS_FULL == 0)
+	{
+	  store_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
+				DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(dst_off_ptr);
+	}
+	else
+	{
+	  store_all_partial_cases<BULK_TYPE,DMA_PARTIAL_BYTES,false/*partial rows*/,
+	  			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(dst_off_ptr);
+	  src_off_ptr += dma_src_step_stride;
+	  dst_off_ptr += dma_dst_step_stride;
+	  // Only need to handle N-1 cases now
+	  for (int i = 0; i < (DMA_STEP_ITERS_FULL-1); i++)
+	  {
+	    all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,false/*partial rows*/,
+	    			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr,dst_off_ptr);
+	    src_off_ptr += dma_src_step_stride;
+	    dst_off_ptr += dma_dst_step_stride;
+	  }
+	  if (DMA_PARTIAL_ROWS)
+	  {
+	    all_partial_cases<BULK_TYPE,false/*do sync*/,DMA_PARTIAL_BYTES,true/*partial rows*/,
+	    			DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL>(src_off_ptr, dst_off_ptr);
+	  }
+	}
+      }
+    }
+    if (DO_SYNC_TOP)
+      CUDADMA_BASE::finish_async_dma();
+  }
+
+  template<typename BULK_TYPE, bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS,
+  		int DMA_ROW_ITERS, int DMA_COL_ITERS>
+  __device__ __forceinline__ void store_all_partial_cases(char *RESTRICT dst_ptr)
+  {
+    if (!DMA_PARTIAL_BYTES)
+    {
+      if (!DMA_PARTIAL_ROWS)
+      {
+	store_strided<BULK_TYPE,true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS>
+			(dst_ptr, dma_dst_elmt_stride,
+			 dma_intra_elmt_stride, 0/*no partial bytes*/);
+      }
+      else
+      {
+	store_strided_upper<BULK_TYPE,true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS>
+			(dst_ptr, dma_dst_elmt_stride,
+			 dma_intra_elmt_stride, 0/*no partial bytes*/, dma_partial_elmts);
+      }
+    }
+    else
+    {
+      if (!DMA_PARTIAL_ROWS)
+      {
+	store_strided<BULK_TYPE,false/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS>
+			(dst_ptr, dma_dst_elmt_stride,
+			 dma_intra_elmt_stride, dma_partial_bytes);
+      }
+      else
+      {
+	store_strided_upper<BULK_TYPE,false/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS>
+			(dst_ptr, dma_dst_elmt_stride,
+			 dma_intra_elmt_stride, dma_partial_bytes, dma_partial_elmts);
+      }
+    }
+  }
+
+  template<typename BULK_TYPE, bool DMA_ALL_ACTIVE, int DMA_ROW_ITERS, int DMA_COL_ITERS>
+  __device__ __forceinline__ void store_strided(char *RESTRICT dst_ptr, const int dst_elmt_stride,
+  						const int intra_elmt_stride, const int partial_bytes)
+  {
+    unsigned idx = 0;
+    char *dst_row_ptr = dst_ptr;
+    for (int row = 0; row < DMA_ROW_ITERS; row++)
+    {
+      char *dst_col_ptr = dst_row_ptr;
+      for (int col = 0; col < DMA_COL_ITERS; col++)
+      {
+	perform_store<BULK_TYPE>(&(temp[idx*sizeof(BULK_TYPE)/sizeof(float)]), dst_col_ptr);
+	idx++;
+	dst_col_ptr += intra_elmt_stride;
+      }
+      dst_row_ptr += dst_elmt_stride;
+    } 
+    if (!DMA_ALL_ACTIVE)
+    { 
+      store_across<DMA_ROW_ITERS>(dst_ptr+dma_partial_offset,
+			      dst_elmt_stride,partial_bytes,
+			      &(temp[DMA_ROW_ITERS*DMA_COL_ITERS*sizeof(BULK_TYPE)/sizeof(float)]));
+    }
+  }
+
+  template<typename BULK_TYPE, bool DMA_ALL_ACTIVE, int DMA_ROW_ITERS_UPPER, int DMA_COL_ITERS>
+  __device__ __forceinline__ void store_strided_upper(char *RESTRICT dst_ptr, const int dst_elmt_stride,
+  						      const int intra_elmt_stride, const int partial_bytes,
+						      const int row_iters)
+  {
+    unsigned idx = 0;
+    char *dst_row_ptr = dst_ptr;
+    for (int row = 0; row < row_iters; row++)
+    {
+      char *dst_col_ptr = dst_row_ptr;
+      for (int col = 0; col < DMA_COL_ITERS; col++)
+      {
+	perform_store<BULK_TYPE>(&(temp[idx*sizeof(BULK_TYPE)/sizeof(float)]), dst_col_ptr);
+	idx++;
+	dst_col_ptr += intra_elmt_stride;
+      }
+      dst_row_ptr += dst_elmt_stride;
+    } 
+    if (!DMA_ALL_ACTIVE)
+    { 
+      store_across_upper<DMA_ROW_ITERS_UPPER>(dst_ptr+dma_partial_offset,
+			      dst_elmt_stride,partial_bytes,
+			      &(temp[DMA_ROW_ITERS*DMA_COL_ITERS*sizeof(BULK_TYPE)/sizeof(float)]),
+			      row_iters);
+    } 
+  }
+
+  template<int DMA_ROW_ITERS>
+  __device__ __forceinline__ void store_across(char *RESTRICT dst_ptr, const int dst_elmt_stride,
+  						       const int partial_bytes, const void *temp)
+  {
+    const char *temp_ptr = (const char*)temp;
+    switch (partial_bytes)
+    {
+      case 0:
+        break;
+      case 4:
+        {
+	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+	  {
+	    perform_store<float>(temp_ptr, dst_ptr);
+	    dst_ptr += dst_elmt_stride;
+	    temp_ptr += sizeof(float);
+	  }
+	  break;
+	}
+      case 8:
+	{
+	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+	  {
+	    perform_store<float2>(temp_ptr, dst_ptr);
+	    dst_ptr += dst_elmt_stride;
+	    temp_ptr += sizeof(float2);
+	  }
+	  break;
+	}
+      case 12:
+	{
+	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+	  {
+	    perform_store<float3>(temp_ptr, dst_ptr);
+	    dst_ptr += dst_elmt_stride;
+	    temp_ptr += sizeof(float3);
+	  }
+	  break;
+	}
+      case 16:
+	{
+	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
+	  {
+	    perform_store<float4>(temp_ptr, dst_ptr);
+	    dst_ptr += dst_elmt_stride;
+	    temp_ptr += sizeof(float4);
+	  }
+	  break;
+	}
+#ifdef CUDADMA_DEBUG_ON
+      default:
+        printf("Invalid partial bytes size (%d) for strided across.\n" partial_bytes);
+        assert(false);
+#endif
+    }
+  }
+
+  template<int DMA_ROW_ITERS_UPPER>
+  __device__ __forceinline__ void store_across_upper(char *RESTRICT dst_ptr, const int dst_elmt_stride,
+							     const int partial_bytes, const void *temp,
+							     const int row_iters)
+  {
+    const char *temp_ptr = (const char*)temp;
+    switch (partial_bytes)
+    {
+      case 0:
+        break;
+      case 4:
+        {
+	  for (int idx = 0; idx < row_iters; idx++)
+	  {
+	    perform_store<float>(temp_ptr, dst_ptr);
+	    dst_ptr += dst_elmt_stride;
+	    temp_ptr += sizeof(float);
+	  }
+	  break;
+	}
+      case 8:
+	{
+	  for (int idx = 0; idx < row_iters; idx++)
+	  {
+	    perform_store<float2>(temp_ptr, dst_ptr);
+	    dst_ptr += dst_elmt_stride;
+	    temp_ptr += sizeof(float2);
+	  }
+	  break;
+	}
+      case 12:
+	{
+	  for (int idx = 0; idx < row_iters; idx++)
+	  {
+	    perform_store<float3>(temp_ptr, dst_ptr);
+	    dst_ptr += dst_elmt_stride;
+	    temp_ptr += sizeof(float3);
+	  }
+	  break;
+	}
+      case 16:
+	{
+	  for (int idx = 0; idx < row_iters; idx++)
+	  {
+	    perform_store<float4>(temp_ptr, dst_ptr);
+	    dst_ptr += dst_elmt_stride;
+	    temp_ptr += sizeof(float4);
+	  }
+	  break;
+	}
+#ifdef CUDADMA_DEBUG_ON
+      default:
+        printf("Invalid partial bytes size (%d) for strided across.\n" partial_bytes);
+        assert(false);
+#endif
+    }
+
+  }
+protected:
+  const char * src_off_ptr;
+  float buffer[GUARD_ZERO(BYTES_PER_THREAD/sizeof(float))];
+};
+#endif
+
 

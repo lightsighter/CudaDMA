@@ -1381,7 +1381,7 @@ protected: // begin xfer functions
       }
       else
       {
-	load_strided_upper<BULK_TYPE,true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS>
+	load_strided_upper<BULK_TYPE,false/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS>
 			(src_ptr, this->dma_src_elmt_stride, 
 			 this->dma_intra_elmt_stride, this->dma_partial_bytes, this->dma_partial_elmts);
       }

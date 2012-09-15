@@ -1255,13 +1255,13 @@ public:
     }
   }
 
-  __device__ __forceinline__ void wait_commit_xfer(void *RESTRICT dst_ptr) 
+  __device__ __forceinline__ void wait_xfer_commit(void *RESTRICT dst_ptr) 
   {
     switch (ALIGNMENT)
     {
       case 4:
       	{
-          execute_commit_xfer<float,SPLIT_WARP,BIG_ELMTS,
+          execute_xfer_commit<float,SPLIT_WARP,BIG_ELMTS,
                                   STEP_ITERS_SPLIT,ROW_ITERS_SPLIT,COL_ITERS_SPLIT,
                                   STEP_ITERS_BIG,MAX_ITERS_BIG,PART_ITERS_BIG,
 	  			  STEP_ITERS_FULL,ROW_ITERS_FULL,COL_ITERS_FULL,
@@ -1270,7 +1270,7 @@ public:
 	}
     case 8:
       	{
-	  execute_commit_xfer<float2,SPLIT_WARP,BIG_ELMTS,
+	  execute_xfer_commit<float2,SPLIT_WARP,BIG_ELMTS,
                                   STEP_ITERS_SPLIT,ROW_ITERS_SPLIT,COL_ITERS_SPLIT,
                                   STEP_ITERS_BIG,MAX_ITERS_BIG,PART_ITERS_BIG,
 	  			  STEP_ITERS_FULL,ROW_ITERS_FULL,COL_ITERS_FULL,
@@ -1279,7 +1279,7 @@ public:
 	}
     case 16:
       	{
-	  execute_commit_xfer<float4,SPLIT_WARP,BIG_ELMTS,
+	  execute_xfer_commit<float4,SPLIT_WARP,BIG_ELMTS,
                                   STEP_ITERS_SPLIT,ROW_ITERS_SPLIT,COL_ITERS_SPLIT,
                                   STEP_ITERS_BIG,MAX_ITERS_BIG,PART_ITERS_BIG,
 	  			  STEP_ITERS_FULL,ROW_ITERS_FULL,COL_ITERS_FULL,
@@ -1563,7 +1563,7 @@ protected: // commit xfer functions
            int DMA_STEP_ITERS_BIG,   int DMA_MAX_ITERS_BIG,   int DMA_PART_ITERS_BIG,
            int DMA_STEP_ITERS_FULL,  int DMA_ROW_ITERS_FULL,  int DMA_COL_ITERS_FULL,
 	   bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS, bool DMA_ALL_WARPS_ACTIVE>
-  __device__ __forceinline__ void execute_commit_xfer(void *RESTRICT dst_ptr) 
+  __device__ __forceinline__ void execute_xfer_commit(void *RESTRICT dst_ptr) 
   {
     char * dst_off_ptr = ((char*)dst_ptr) + this->dma_dst_offset;
     if (DO_SYNC_TOP)

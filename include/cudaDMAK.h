@@ -29,8 +29,9 @@ __device__ __forceinline__ void ptx_cudaDMA_barrier_nonblocking (const int name,
 #define CUDADMA_BASE cudaDMA
 #define CUDADMA_DMA_TID (threadIdx.x-dma_threadIdx_start)
 #define WARP_SIZE 32
+#define GUARD_UNDERFLOW(expr) ((expr < 0) ? 0 : expr)
 #define GUARD_ZERO(expr) ((expr == 0) ? 1 : expr)
-#define GUARD_OVERFLOW(index,max) ((index < max) ? index : max)
+#define GUARD_OVERFLOW(index,max) ((index < max) ? index : max-1)
 
 // Enable the restrict keyword to allow additional compiler optimizations
 // Note that this can increase register pressure (see appendix B.2.4 of
@@ -44,7 +45,7 @@ __device__ __forceinline__ void ptx_cudaDMA_barrier_nonblocking (const int name,
 #endif
 
 // Enable the use of LDG load operations
-//#define ENABLE_LDG
+#define ENABLE_LDG
 
 #ifdef ENABLE_LDG
 template<typename T>
@@ -60,7 +61,8 @@ __device__ __forceinline__
 float3 __ldg_intr(const float3* ptr)
 {
   float3 result; 
-  asm volatile("ld.global.nc.v3.f32 {%0,%1,%2}, [%3];" : "=f"(result.x), "=f"(result.y), "=f"(result.z) : "l"(ptr) : "memory");
+  asm volatile("ld.global.nc.v2.f32 {%0,%1}, [%2];" : "=f"(result.x), "=f"(result.y) : "l"(ptr) : "memory");
+  asm volatile("ld.global.nc.f32 %0, [%1+8];" : "=f"(result.z) : "l"(ptr) : "memory");
   return result;
 }
 #endif
@@ -102,9 +104,9 @@ public:
   {
     ptx_cudaDMA_barrier_nonblocking(barrierID_full,barrier_size);
   }
-protected:
+public:
   template<typename T>
-  __device__ __forceinline__ void perform_load(const void *src_ptr, void *dst_ptr) const
+  static __device__ __forceinline__ void perform_load(const void *src_ptr, void *dst_ptr)
   {
 #ifdef ENABLE_LDG
     *((T*)dst_ptr) = __ldg_intr(((T*)src_ptr));
@@ -113,7 +115,7 @@ protected:
 #endif
   }
   template<typename T>
-  __device__ __forceinline__ void perform_store(const void *src_ptr, void *dst_ptr) const
+  static __device__ __forceinline__ void perform_store(const void *src_ptr, void *dst_ptr)
   {
     *((T*)dst_ptr) = *((T*)src_ptr);
   }
@@ -1183,6 +1185,194 @@ protected:
   const bool         dma_active_warp;
 };
 
+// Helper namespace for some template meta-programming structures that we need
+// for the two phase implementations of the code so that the compiler generates good code.
+namespace CudaDMAMeta {
+    template<typename ET, unsigned LS>
+    class DMABuffer {
+    public:
+      template<unsigned IDX>
+      __device__ __forceinline__
+      ET& get_ref(void) { return get_ref_impl<GUARD_OVERFLOW(IDX,LS)>(); }
+      template<unsigned IDX>
+      __device__ __forceinline__
+      const ET& get_ref(void) const { return get_ref_impl<GUARD_OVERFLOW(IDX,LS)>(); }
+      template<unsigned IDX>
+      __device__ __forceinline__
+      ET* get_ptr(void) { return get_ptr_impl<GUARD_OVERFLOW(IDX,LS)>(); }
+      template<unsigned IDX>
+      __device__ __forceinline__
+      const ET* get_ptr(void) const { return get_ptr_impl<GUARD_OVERFLOW(IDX,LS)>(); }
+    public:
+      template<unsigned IDX>
+      __device__ __forceinline__
+      void perform_load(const void *src_ptr) { perform_load_impl<GUARD_OVERFLOW(IDX,LS)>(src_ptr); }
+      template<unsigned IDX>
+      __device__ __forceinline__
+      void perform_store(void *dst_ptr) const { perform_store_impl<GUARD_OVERFLOW(IDX,LS)>(dst_ptr); }
+    private:
+      template<unsigned IDX>
+      __device__ __forceinline__
+      ET& get_ref_impl(void) { return buffer[IDX]; }
+      template<unsigned IDX>
+      __device__ __forceinline__
+      const ET& get_ref_impl(void) const { return buffer[IDX]; }
+      template<unsigned IDX>
+      __device__ __forceinline__
+      ET* get_ptr_impl(void) { return &buffer[IDX]; }
+      template<unsigned IDX>
+      __device__ __forceinline__
+      const ET* get_ptr_impl(void) const { return &buffer[IDX]; }
+    private:
+      template<unsigned IDX>
+      __device__ __forceinline__
+      void perform_load_impl(const void *src_ptr)
+      {
+#ifdef ENABLE_LDG
+	buffer[IDX] = __ldg_intr(((const ET*)src_ptr));
+#else
+	buffer[IDX] = *((const ET*)src_ptr);
+#endif
+      }
+      template<unsigned IDX>
+      __device__ __forceinline__
+      void perform_store_impl(void *dst_ptr) const
+      {
+      	*((ET*)dst_ptr) = buffer[IDX];
+      }
+    private:
+      ET buffer[LS];
+    };
+
+    // These following templates are ways of statically forcing the compiler to unroll the
+    // loops for loading and storing into/from the DMABuffer objects.
+    template<typename BUFFER, unsigned STRIDE, unsigned MAX, unsigned IDX>
+    struct BufferLoader {
+      static __device__ __forceinline__
+      void load_all(BUFFER &buffer, const char *src, unsigned stride)
+      {
+	buffer.template perform_load<MAX-IDX>(src);
+	BufferLoader<BUFFER,STRIDE,MAX,IDX-STRIDE>::load_all(buffer, src+stride, stride);
+      }
+    };
+
+    template<typename BUFFER, unsigned STRIDE>
+    struct BufferLoader<BUFFER,STRIDE,0,0>
+    {
+      static __device__ __forceinline__
+      void load_all(BUFFER &buffer, const char *src, unsigned stride)
+      {
+        // do nothing
+      }
+    };
+
+    template<typename BUFFER, unsigned STRIDE, unsigned MAX>
+    struct BufferLoader<BUFFER,STRIDE,MAX,0>
+    {
+      static __device__ __forceinline__
+      void load_all(BUFFER &buffer, const char *src, unsigned stride)
+      {
+	buffer.template perform_load<MAX>(src);
+      }
+    };
+
+    template<typename BUFFER, unsigned STRIDE, unsigned MAX, unsigned IDX>
+    struct BufferStorer {
+      static __device__ __forceinline__
+      void store_all(const BUFFER &buffer, char *dst, unsigned stride)
+      {
+	buffer.template perform_store<MAX-IDX>(dst);
+	BufferStorer<BUFFER,STRIDE,MAX,IDX-STRIDE>::store_all(buffer, dst+stride, stride);
+      }
+    };
+
+    template<typename BUFFER, unsigned STRIDE>
+    struct BufferStorer<BUFFER,STRIDE,0,0>
+    {
+      static __device__ __forceinline__
+      void store_all(const BUFFER &buffer, char *dst, unsigned stride)
+      {
+        // do nothing
+      }
+    };
+
+    template<typename BUFFER, unsigned STRIDE, unsigned MAX>
+    struct BufferStorer<BUFFER,STRIDE,MAX,0>
+    {
+      static __device__ __forceinline__
+      void store_all(const BUFFER &buffer, char *dst, unsigned stride)
+      {
+	buffer.template perform_store<MAX>(dst);
+      }
+    };
+
+    // Conditional versions of the structs above iterating statically
+    // and evaluating a condition
+    template<typename BUFFER, int STRIDE, int MAX, int IDX>
+    struct ConditionalLoader {
+      static __device__ __forceinline__
+      void load_all(BUFFER &buffer, const char *src, int stride, int actual_max)
+      {
+	if ((MAX-IDX) < actual_max)
+	  buffer.template perform_load<MAX-IDX>(src);
+	ConditionalLoader<BUFFER,STRIDE,MAX,IDX-STRIDE>::load_all(buffer, src+stride, stride, actual_max);
+      }
+    };
+
+    template<typename BUFFER, int STRIDE>
+    struct ConditionalLoader<BUFFER,STRIDE,0,0>
+    {
+      static __device__ __forceinline__
+      void load_all(BUFFER &buffer, const char *src, int stride, int actual_max)
+      {
+	// do nothing
+      }
+    };
+
+    template<typename BUFFER, int STRIDE, int MAX>
+    struct ConditionalLoader<BUFFER,STRIDE,MAX,0>
+    {
+      static __device__ __forceinline__
+      void load_all(BUFFER &buffer, const char *src, int stride, int actual_max)
+      {
+	if (MAX < actual_max)
+	  buffer.template perform_load<MAX>(src);
+      }
+    };
+
+    template<typename BUFFER, int STRIDE, int MAX, int IDX>
+    struct ConditionalStorer {
+      static __device__ __forceinline__
+      void store_all(const BUFFER &buffer, char *dst, int stride, int actual_max)
+      {
+	if ((MAX-IDX) < actual_max)
+	  buffer.template perform_store<MAX-IDX>(dst);
+	ConditionalStorer<BUFFER,STRIDE,MAX,IDX-STRIDE>::store_all(buffer, dst+stride, stride, actual_max);
+      }
+    };
+
+    template<typename BUFFER, int STRIDE>
+    struct ConditionalStorer<BUFFER,STRIDE,0,0>
+    {
+      static __device__ __forceinline__
+      void store_all(const BUFFER &buffer, char *dst, int stride, int actual_max)
+      {
+	// do nothing
+      }
+    };
+
+    template<typename BUFFER, int STRIDE, int MAX>
+    struct ConditionalStorer<BUFFER,STRIDE,MAX,0>
+    {
+      static __device__ __forceinline__
+      void store_all(const BUFFER &buffer, char *dst, int stride, int actual_max)
+      {
+	if (MAX < actual_max)
+	  buffer.template perform_store<MAX>(dst);
+      }
+    };
+};
+
 /**
  * This is a different version of CudaDMAStrided in the new model that instead of having
  * a single execute_dma call will break the code into separate begin_xfer and commit_xfer
@@ -1394,24 +1584,16 @@ protected: // begin xfer functions
   				  	       const int src_elmt_stride, 
 					       const int intra_elmt_stride, const int partial_bytes)
   {
-    unsigned idx = 0;
     const char *src_row_ptr = src_ptr;
     for (int row = 0; row < DMA_ROW_ITERS; row++)
     {
-      const char *src_col_ptr = src_row_ptr;
-      for (int col = 0; col < DMA_COL_ITERS; col++)
-      {
-        CUDADMA_BASE::perform_load<BULK_TYPE>(src_col_ptr, &(buffer[idx]));
-	idx++;
-	src_col_ptr += intra_elmt_stride;
-      }
+      CudaDMAMeta::BufferLoader<BulkBuffer,1,GUARD_UNDERFLOW(DMA_COL_ITERS-1),GUARD_UNDERFLOW(DMA_COL_ITERS-1)>::load_all(bulk_buffer, src_row_ptr, intra_elmt_stride);
       src_row_ptr += src_elmt_stride;
     }
     if (!DMA_ALL_ACTIVE)
     {
       load_across<DMA_ROW_ITERS>(src_ptr+this->dma_partial_offset,
-                         src_elmt_stride, partial_bytes,
-                         &(buffer[GUARD_OVERFLOW(DMA_ROW_ITERS*DMA_COL_ITERS,BYTES_PER_THREAD/ALIGNMENT)]));
+                         src_elmt_stride, partial_bytes);
     }
   }
 
@@ -1420,75 +1602,46 @@ protected: // begin xfer functions
   						const int src_elmt_stride, const int intra_elmt_stride,
 						const int partial_bytes, const int row_iters)
   {
-    unsigned idx = 0;
     const char *src_row_ptr = src_ptr;
     for (int row = 0; row < row_iters; row++)
     {
-      const char *src_col_ptr = src_row_ptr;
-      for (int col = 0; col < DMA_COL_ITERS; col++)
-      {
-        CUDADMA_BASE::perform_load<BULK_TYPE>(src_col_ptr, &(buffer[idx]));
-	idx++;
-	src_col_ptr += intra_elmt_stride;
-      }
+      CudaDMAMeta::BufferLoader<BulkBuffer,1,GUARD_UNDERFLOW(DMA_COL_ITERS-1),GUARD_UNDERFLOW(DMA_COL_ITERS-1)>::load_all(bulk_buffer,src_row_ptr,intra_elmt_stride);
       src_row_ptr += src_elmt_stride;
     }
     if (!DMA_ALL_ACTIVE)
     {
       load_across_upper<DMA_ROW_ITERS_UPPER>(src_ptr+this->dma_partial_offset,
-			     src_elmt_stride, partial_bytes,
-			     &(buffer[row_iters*DMA_COL_ITERS]), row_iters);
+			     src_elmt_stride, partial_bytes, row_iters);
     }
   }
 
   template<int DMA_ROW_ITERS>
   __device__ __forceinline__ void load_across(const char *RESTRICT src_ptr,
-  					      const int src_elmt_stride, const int partial_bytes,
-					      void *temp)
+  					      const int src_elmt_stride, const int partial_bytes)
+					      //void *temp)
   {
-    char *temp_ptr = (char*)temp;
     switch (partial_bytes)
     {
       case 0:
         break;
       case 4:
 	{
-	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
-	  {
-            CUDADMA_BASE::perform_load<float>(src_ptr, temp_ptr);
-	    src_ptr += src_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float);
-	  }
+	  CudaDMAMeta::BufferLoader<AcrossBuffer1,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::load_all(across_one, src_ptr, src_elmt_stride);
 	  break;
 	}
       case 8:
 	{
-	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
-	  {
-	    CUDADMA_BASE::perform_load<float2>(src_ptr, temp_ptr);
-	    src_ptr += src_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float2);
-	  }
+	  CudaDMAMeta::BufferLoader<AcrossBuffer2,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::load_all(across_two, src_ptr, src_elmt_stride);
 	  break;
 	}
       case 12:
       	{
-	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
-	  {
-	    CUDADMA_BASE::perform_load<float3>(src_ptr, temp_ptr);
-	    src_ptr += src_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float3); 
-	  }
+	  CudaDMAMeta::BufferLoader<AcrossBuffer3,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS)>::load_all(across_three, src_ptr, src_elmt_stride);
 	  break;
 	}
       case 16:
         {
-	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
-	  {
-	    CUDADMA_BASE::perform_load<float4>(src_ptr, temp_ptr);
-	    src_ptr += src_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float4);
-	  }
+	  CudaDMAMeta::BufferLoader<AcrossBuffer4,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::load_all(across_four, src_ptr, src_elmt_stride);
 	  break;
 	}
 #ifdef CUDADMA_DEBUG_ON
@@ -1499,54 +1652,33 @@ protected: // begin xfer functions
     }
   }
 
-  template<int DMA_ROW_ITERS>
+  template<int DMA_ROW_ITERS_UPPER>
   __device__ __forceinline__ void load_across_upper(const char *RESTRICT src_ptr,
   					      const int src_elmt_stride, const int partial_bytes,
-					      void *temp, const int row_iters)
+					      const int row_iters)
   {
-    char *temp_ptr = (char*)temp;
     switch (partial_bytes)
     {
       case 0:
         break;
       case 4:
 	{
-	  for (int idx = 0; idx < row_iters; idx++)
-	  {
-	    CUDADMA_BASE::perform_load<float>(src_ptr, temp_ptr);
-	    src_ptr += src_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float);
-	  }
+	  CudaDMAMeta::ConditionalLoader<AcrossBuffer1,1,GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1),GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1)>::load_all(across_one,src_ptr,src_elmt_stride,row_iters);
 	  break;
 	}
       case 8:
 	{
-	  for (int idx = 0; idx < row_iters; idx++)
-	  {
-	    CUDADMA_BASE::perform_load<float2>(src_ptr, temp_ptr);
-	    src_ptr += src_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float2);
-	  }
+	  CudaDMAMeta::ConditionalLoader<AcrossBuffer2,1,GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1),GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1)>::load_all(across_two,src_ptr,src_elmt_stride,row_iters);
 	  break;
 	}
       case 12:
       	{
-	  for (int idx = 0; idx < row_iters; idx++)
-	  {
-	    CUDADMA_BASE::perform_load<float3>(src_ptr, temp_ptr);
-	    src_ptr += src_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float3); 
-	  }
+	  CudaDMAMeta::ConditionalLoader<AcrossBuffer3,1,GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1),GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1)>::load_all(across_three,src_ptr,src_elmt_stride,row_iters);
 	  break;
 	}
       case 16:
         {
-	  for (int idx = 0; idx < row_iters; idx++)
-	  {
-	    CUDADMA_BASE::perform_load<float4>(src_ptr, temp_ptr);
-	    src_ptr += src_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float4);
-	  }
+	  CudaDMAMeta::ConditionalLoader<AcrossBuffer4,1,GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1),GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1)>::load_all(across_four,src_ptr,src_elmt_stride,row_iters);
 	  break;
 	}
 #ifdef CUDADMA_DEBUG_ON
@@ -1690,9 +1822,15 @@ protected: // commit xfer functions
       }
       else
       {
+#if 1
 	store_strided_upper<BULK_TYPE,true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS>
 			(dst_ptr, this->dma_dst_elmt_stride,
 			 this->dma_intra_elmt_stride, 0/*no partial bytes*/, this->dma_partial_elmts);
+#else
+	CUDADMA_STRIDED_BASE::template do_strided_upper<BULK_TYPE,false,true,DMA_ROW_ITERS,DMA_COL_ITERS>
+		(this->dma_src_off_ptr, dst_ptr, this->dma_src_elmt_stride, this->dma_dst_elmt_stride,
+		 this->dma_intra_elmt_stride, 0/*no partial bytes*/, this->dma_partial_elmts);
+#endif
       }
     }
     else
@@ -1705,9 +1843,15 @@ protected: // commit xfer functions
       }
       else
       {
+#if 1
 	store_strided_upper<BULK_TYPE,false/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS>
 			(dst_ptr, this->dma_dst_elmt_stride,
 			 this->dma_intra_elmt_stride, this->dma_partial_bytes, this->dma_partial_elmts);
+#else
+	CUDADMA_STRIDED_BASE::template do_strided_upper<BULK_TYPE,false,false,DMA_ROW_ITERS,DMA_COL_ITERS>
+		(this->dma_src_off_ptr, dst_ptr, this->dma_src_elmt_stride, this->dma_dst_elmt_stride,
+		 this->dma_intra_elmt_stride, this->dma_partial_bytes, this->dma_partial_elmts);
+#endif
       }
     }
   }
@@ -1716,24 +1860,16 @@ protected: // commit xfer functions
   __device__ __forceinline__ void store_strided(char *RESTRICT dst_ptr, const int dst_elmt_stride,
   						const int intra_elmt_stride, const int partial_bytes)
   {
-    unsigned idx = 0;
     char *dst_row_ptr = dst_ptr;
     for (int row = 0; row < DMA_ROW_ITERS; row++)
     {
-      char *dst_col_ptr = dst_row_ptr;
-      for (int col = 0; col < DMA_COL_ITERS; col++)
-      {
-        CUDADMA_BASE::perform_store<BULK_TYPE>(&(buffer[idx]), dst_col_ptr);
-	idx++;
-	dst_col_ptr += intra_elmt_stride;
-      }
+      CudaDMAMeta::BufferStorer<BulkBuffer,1,GUARD_UNDERFLOW(DMA_COL_ITERS-1),GUARD_UNDERFLOW(DMA_COL_ITERS-1)>::store_all(bulk_buffer,dst_row_ptr, intra_elmt_stride);
       dst_row_ptr += dst_elmt_stride;
     } 
     if (!DMA_ALL_ACTIVE)
     { 
       store_across<DMA_ROW_ITERS>(dst_ptr+this->dma_partial_offset,
-			      dst_elmt_stride,partial_bytes,
-			      &(buffer[GUARD_OVERFLOW(DMA_ROW_ITERS*DMA_COL_ITERS,BYTES_PER_THREAD/ALIGNMENT)]));
+			      dst_elmt_stride,partial_bytes);
     }
   }
 
@@ -1742,75 +1878,45 @@ protected: // commit xfer functions
   						      const int intra_elmt_stride, const int partial_bytes,
 						      const int row_iters)
   {
-    unsigned idx = 0;
     char *dst_row_ptr = dst_ptr;
     for (int row = 0; row < row_iters; row++)
     {
-      char *dst_col_ptr = dst_row_ptr;
-      for (int col = 0; col < DMA_COL_ITERS; col++)
-      {
-        CUDADMA_BASE::perform_store<BULK_TYPE>(&(buffer[idx]), dst_col_ptr);
-	idx++;
-	dst_col_ptr += intra_elmt_stride;
-      }
+      CudaDMAMeta::BufferStorer<BulkBuffer,1,GUARD_UNDERFLOW(DMA_COL_ITERS-1),GUARD_UNDERFLOW(DMA_COL_ITERS-1)>::store_all(bulk_buffer,dst_row_ptr,intra_elmt_stride);
       dst_row_ptr += dst_elmt_stride;
     } 
     if (!DMA_ALL_ACTIVE)
     { 
       store_across_upper<DMA_ROW_ITERS_UPPER>(dst_ptr+this->dma_partial_offset,
-			      dst_elmt_stride,partial_bytes,
-			      &(buffer[row_iters*DMA_COL_ITERS]),
-			      row_iters);
+			      dst_elmt_stride,partial_bytes,row_iters);
     } 
   }
 
   template<int DMA_ROW_ITERS>
   __device__ __forceinline__ void store_across(char *RESTRICT dst_ptr, const int dst_elmt_stride,
-  						       const int partial_bytes, const void *temp)
+  						       const int partial_bytes)// const void *temp)
   {
-    const char *temp_ptr = (const char*)temp;
     switch (partial_bytes)
     {
       case 0:
         break;
       case 4:
         {
-	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
-	  {
-            CUDADMA_BASE::perform_store<float>(temp_ptr, dst_ptr);
-	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float);
-	  }
+	  CudaDMAMeta::BufferStorer<AcrossBuffer1,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::store_all(across_one, dst_ptr, dst_elmt_stride);
 	  break;
 	}
       case 8:
 	{
-	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
-	  {
-            CUDADMA_BASE::perform_store<float2>(temp_ptr, dst_ptr);
-	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float2);
-	  }
+	  CudaDMAMeta::BufferStorer<AcrossBuffer2,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::store_all(across_two,dst_ptr, dst_elmt_stride);
 	  break;
 	}
       case 12:
 	{
-	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
-	  {
-            CUDADMA_BASE::perform_store<float3>(temp_ptr, dst_ptr);
-	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float3); 
-	  }
+	  CudaDMAMeta::BufferStorer<AcrossBuffer3,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::store_all(across_three, dst_ptr, dst_elmt_stride);
 	  break;
 	}
       case 16:
 	{
-	  for (int idx = 0; idx < DMA_ROW_ITERS; idx++)
-	  {
-            CUDADMA_BASE::perform_store<float4>(temp_ptr, dst_ptr);
-	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float4);
-	  }
+	  CudaDMAMeta::BufferStorer<AcrossBuffer4,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::store_all(across_four ,dst_ptr, dst_elmt_stride);
 	  break;
 	}
 #ifdef CUDADMA_DEBUG_ON
@@ -1823,52 +1929,30 @@ protected: // commit xfer functions
 
   template<int DMA_ROW_ITERS_UPPER>
   __device__ __forceinline__ void store_across_upper(char *RESTRICT dst_ptr, const int dst_elmt_stride,
-							     const int partial_bytes, const void *temp,
-							     const int row_iters)
+							     const int partial_bytes, const int row_iters)
   {
-    const char *temp_ptr = (const char*)temp;
     switch (partial_bytes)
     {
       case 0:
         break;
       case 4:
         {
-	  for (int idx = 0; idx < row_iters; idx++)
-	  {
-            CUDADMA_BASE::perform_store<float>(temp_ptr, dst_ptr);
-	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float);
-	  }
+	  CudaDMAMeta::ConditionalStorer<AcrossBuffer1,1,GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1),GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1)>::store_all(across_one,dst_ptr,dst_elmt_stride,row_iters);
 	  break;
 	}
       case 8:
 	{
-	  for (int idx = 0; idx < row_iters; idx++)
-	  {
-            CUDADMA_BASE::perform_store<float2>(temp_ptr, dst_ptr);
-	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float2);
-	  }
+	  CudaDMAMeta::ConditionalStorer<AcrossBuffer2,1,GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1),GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1)>::store_all(across_two,dst_ptr,dst_elmt_stride,row_iters);
 	  break;
 	}
       case 12:
 	{
-	  for (int idx = 0; idx < row_iters; idx++)
-	  {
-            CUDADMA_BASE::perform_store<float3>(temp_ptr, dst_ptr);
-	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float3); 
-	  }
+	  CudaDMAMeta::ConditionalStorer<AcrossBuffer3,1,GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1),GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1)>::store_all(across_three,dst_ptr,dst_elmt_stride,row_iters);
 	  break;
 	}
       case 16:
 	{
-	  for (int idx = 0; idx < row_iters; idx++)
-	  {
-            CUDADMA_BASE::perform_store<float4>(temp_ptr, dst_ptr);
-	    dst_ptr += dst_elmt_stride;
-	    temp_ptr += MIN_UPDATE(float4);
-	  }
+	  CudaDMAMeta::ConditionalStorer<AcrossBuffer4,1,GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1),GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1)>::store_all(across_four,dst_ptr,dst_elmt_stride,row_iters);
 	  break;
 	}
 #ifdef CUDADMA_DEBUG_ON
@@ -1878,9 +1962,32 @@ protected: // commit xfer functions
 #endif
     }
   }
+
 protected:
   const char * dma_src_off_ptr;
-  ALIGNMENT_TYPE buffer[GUARD_ZERO(BYTES_PER_THREAD/ALIGNMENT)];
+  typedef CudaDMAMeta::DMABuffer<ALIGNMENT_TYPE,GUARD_ZERO(BYTES_PER_THREAD/ALIGNMENT)> BulkBuffer;
+  BulkBuffer bulk_buffer;
+  typedef CudaDMAMeta::DMABuffer<float,GUARD_ZERO(SPLIT_WARP ? ROW_ITERS_SPLIT : 
+  				BIG_ELMTS ? 1 : ROW_ITERS_FULL)*ALIGNMENT/sizeof(float)> AcrossBuffer1;
+  typedef CudaDMAMeta::DMABuffer<float2,GUARD_ZERO(SPLIT_WARP ? ROW_ITERS_SPLIT : 
+  				BIG_ELMTS ? 1 : ROW_ITERS_FULL)*ALIGNMENT/sizeof(float2)> AcrossBuffer2;
+  typedef CudaDMAMeta::DMABuffer<float3,GUARD_ZERO(SPLIT_WARP ? ROW_ITERS_SPLIT : 
+  				BIG_ELMTS ? 1 : ROW_ITERS_FULL)*ALIGNMENT/sizeof(float3)> AcrossBuffer3;
+  typedef CudaDMAMeta::DMABuffer<float4,GUARD_ZERO(SPLIT_WARP ? ROW_ITERS_SPLIT : 
+  				BIG_ELMTS ? 1 : ROW_ITERS_FULL)*ALIGNMENT/sizeof(float4)> AcrossBuffer4;
+#if 0
+  union AcrossBuffer {
+    AcrossBuffer1 one;
+    AcrossBuffer2 two;
+    AcrossBuffer3 three;
+    AcrossBuffer4 four;
+  } across_buffer;
+#else
+  AcrossBuffer1 across_one;
+  AcrossBuffer2 across_two;
+  AcrossBuffer3 across_three;
+  AcrossBuffer4 across_four;
+#endif
 };
 
 

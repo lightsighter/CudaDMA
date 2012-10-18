@@ -1246,18 +1246,18 @@ namespace CudaDMAMeta {
 
     // These following templates are ways of statically forcing the compiler to unroll the
     // loops for loading and storing into/from the DMABuffer objects.
-    template<typename BUFFER, unsigned STRIDE, unsigned MAX, unsigned IDX>
+    template<typename BUFFER, unsigned OFFSET, unsigned STRIDE, unsigned MAX, unsigned IDX>
     struct BufferLoader {
       static __device__ __forceinline__
       void load_all(BUFFER &buffer, const char *src, unsigned stride)
       {
-	buffer.template perform_load<MAX-IDX>(src);
-	BufferLoader<BUFFER,STRIDE,MAX,IDX-STRIDE>::load_all(buffer, src+stride, stride);
+	buffer.template perform_load<OFFSET+MAX-IDX>(src);
+	BufferLoader<BUFFER,OFFSET,STRIDE,MAX,IDX-STRIDE>::load_all(buffer, src+stride, stride);
       }
     };
 
-    template<typename BUFFER, unsigned STRIDE>
-    struct BufferLoader<BUFFER,STRIDE,0,0>
+    template<typename BUFFER, unsigned OFFSET, unsigned STRIDE>
+    struct BufferLoader<BUFFER,OFFSET,STRIDE,0,0>
     {
       static __device__ __forceinline__
       void load_all(BUFFER &buffer, const char *src, unsigned stride)
@@ -1266,28 +1266,28 @@ namespace CudaDMAMeta {
       }
     };
 
-    template<typename BUFFER, unsigned STRIDE, unsigned MAX>
-    struct BufferLoader<BUFFER,STRIDE,MAX,0>
+    template<typename BUFFER, unsigned OFFSET, unsigned STRIDE, unsigned MAX>
+    struct BufferLoader<BUFFER,OFFSET,STRIDE,MAX,0>
     {
       static __device__ __forceinline__
       void load_all(BUFFER &buffer, const char *src, unsigned stride)
       {
-	buffer.template perform_load<MAX>(src);
+	buffer.template perform_load<OFFSET+MAX>(src);
       }
     };
 
-    template<typename BUFFER, unsigned STRIDE, unsigned MAX, unsigned IDX>
+    template<typename BUFFER, unsigned OFFSET, unsigned STRIDE, unsigned MAX, unsigned IDX>
     struct BufferStorer {
       static __device__ __forceinline__
       void store_all(const BUFFER &buffer, char *dst, unsigned stride)
       {
-	buffer.template perform_store<MAX-IDX>(dst);
-	BufferStorer<BUFFER,STRIDE,MAX,IDX-STRIDE>::store_all(buffer, dst+stride, stride);
+	buffer.template perform_store<OFFSET+MAX-IDX>(dst);
+	BufferStorer<BUFFER,OFFSET,STRIDE,MAX,IDX-STRIDE>::store_all(buffer, dst+stride, stride);
       }
     };
 
-    template<typename BUFFER, unsigned STRIDE>
-    struct BufferStorer<BUFFER,STRIDE,0,0>
+    template<typename BUFFER, unsigned OFFSET, unsigned STRIDE>
+    struct BufferStorer<BUFFER,OFFSET,STRIDE,0,0>
     {
       static __device__ __forceinline__
       void store_all(const BUFFER &buffer, char *dst, unsigned stride)
@@ -1296,13 +1296,76 @@ namespace CudaDMAMeta {
       }
     };
 
-    template<typename BUFFER, unsigned STRIDE, unsigned MAX>
-    struct BufferStorer<BUFFER,STRIDE,MAX,0>
+    template<typename BUFFER, unsigned OFFSET, unsigned STRIDE, unsigned MAX>
+    struct BufferStorer<BUFFER,OFFSET,STRIDE,MAX,0>
     {
       static __device__ __forceinline__
       void store_all(const BUFFER &buffer, char *dst, unsigned stride)
       {
-	buffer.template perform_store<MAX>(dst);
+	buffer.template perform_store<OFFSET+MAX>(dst);
+      }
+    };
+
+    // Higher-order static looping constructs for supporting nested loops
+    template<typename BUFFER, unsigned IN_STRIDE, unsigned IN_MAX, unsigned OUT_SCALE, unsigned OUT_STRIDE, 
+    		unsigned OUT_MAX, unsigned OUT_IDX>
+    struct NestedBufferLoader {
+      static __device__ __forceinline__
+      void load_all(BUFFER &buffer, const char *src, unsigned outer_stride, unsigned inner_stride)
+      {
+	BufferLoader<BUFFER,(OUT_MAX-OUT_IDX)*OUT_SCALE,IN_STRIDE,IN_MAX,IN_MAX>::load_all(buffer, src, inner_stride);
+	NestedBufferLoader<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,OUT_MAX,OUT_IDX-OUT_STRIDE>::load_all(buffer,src+outer_stride,outer_stride,inner_stride);
+      }
+    };
+
+    template<typename BUFFER, unsigned IN_STRIDE, unsigned IN_MAX, unsigned OUT_SCALE, unsigned OUT_STRIDE>
+    struct NestedBufferLoader<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,0,0>
+    {
+      static __device__ __forceinline__
+      void load_all(BUFFER &buffer, const char *src, unsigned outer_stride, unsigned inner_stride)
+      {
+	// do nothing
+      }
+    };
+
+    template<typename BUFFER, unsigned IN_STRIDE, unsigned IN_MAX, unsigned OUT_SCALE, unsigned OUT_STRIDE, unsigned OUT_MAX>
+    struct NestedBufferLoader<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,OUT_MAX,0>
+    {
+      static __device__ __forceinline__
+      void load_all(BUFFER &buffer, const char *src, unsigned outer_stride, unsigned inner_stride)
+      {
+	BufferLoader<BUFFER,OUT_MAX*OUT_SCALE,IN_STRIDE,IN_MAX,IN_MAX>::load_all(buffer, src, inner_stride);
+      }
+    };
+
+    template<typename BUFFER, unsigned IN_STRIDE, unsigned IN_MAX, unsigned OUT_SCALE, unsigned OUT_STRIDE,
+    		unsigned OUT_MAX, unsigned OUT_IDX>
+    struct NestedBufferStorer {
+      static __device__ __forceinline__
+      void store_all(const BUFFER &buffer, char *dst, unsigned outer_stride, unsigned inner_stride)
+      {
+	BufferStorer<BUFFER,(OUT_MAX-OUT_IDX)*OUT_SCALE,IN_STRIDE,IN_MAX,IN_MAX>::store_all(buffer, dst, inner_stride);
+	NestedBufferStorer<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,OUT_MAX,OUT_IDX-OUT_STRIDE>::store_all(buffer,dst+outer_stride,outer_stride,inner_stride);
+      }
+    };
+
+    template<typename BUFFER, unsigned IN_STRIDE, unsigned IN_MAX, unsigned OUT_SCALE, unsigned OUT_STRIDE>
+    struct NestedBufferStorer<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,0,0>
+    {
+      static __device__ __forceinline__
+      void store_all(const BUFFER &buffer, char *dst, unsigned outer_stride, unsigned inner_stride)
+      {
+	// do nothing
+      }
+    };
+
+    template<typename BUFFER, unsigned IN_STRIDE, unsigned IN_MAX, unsigned OUT_SCALE, unsigned OUT_STRIDE, unsigned OUT_MAX>
+    struct NestedBufferStorer<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,OUT_MAX,0>
+    {
+      static __device__ __forceinline__
+      void store_all(const BUFFER &buffer, char *dst, unsigned outer_stride, unsigned inner_stride)
+      {
+	BufferStorer<BUFFER,OUT_MAX*OUT_SCALE,IN_STRIDE,IN_MAX,IN_MAX>::store_all(buffer, dst, inner_stride);
       }
     };
 
@@ -1369,6 +1432,73 @@ namespace CudaDMAMeta {
       {
 	if (MAX < actual_max)
 	  buffer.template perform_store<MAX>(dst);
+      }
+    };
+
+    // Higher-order static looping constructs for supporting conditional nested loops
+    template<typename BUFFER, unsigned IN_STRIDE, unsigned IN_MAX, unsigned OUT_SCALE, unsigned OUT_STRIDE, 
+    		unsigned OUT_MAX, unsigned OUT_IDX>
+    struct NestedConditionalLoader {
+      static __device__ __forceinline__
+      void load_all(BUFFER &buffer, const char *src, unsigned outer_stride, unsigned inner_stride, unsigned actual_max)
+      {
+        if ((OUT_MAX-OUT_IDX) < actual_max)
+	    BufferLoader<BUFFER,(OUT_MAX-OUT_IDX)*OUT_SCALE,IN_STRIDE,IN_MAX,IN_MAX>::load_all(buffer, src, inner_stride);
+	NestedConditionalLoader<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,OUT_MAX,OUT_IDX-OUT_STRIDE>::load_all(buffer,src+outer_stride,outer_stride,inner_stride,actual_max);
+      }
+    };
+
+    template<typename BUFFER, unsigned IN_STRIDE, unsigned IN_MAX, unsigned OUT_SCALE, unsigned OUT_STRIDE>
+    struct NestedConditionalLoader<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,0,0>
+    {
+      static __device__ __forceinline__
+      void load_all(BUFFER &buffer, const char *src, unsigned outer_stride, unsigned inner_stride, unsigned actual_max)
+      {
+	// do nothing
+      }
+    };
+
+    template<typename BUFFER, unsigned IN_STRIDE, unsigned IN_MAX, unsigned OUT_SCALE, unsigned OUT_STRIDE, unsigned OUT_MAX>
+    struct NestedConditionalLoader<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,OUT_MAX,0>
+    {
+      static __device__ __forceinline__
+      void load_all(BUFFER &buffer, const char *src, unsigned outer_stride, unsigned inner_stride, unsigned actual_max)
+      {
+        if (OUT_MAX < actual_max)
+	  BufferLoader<BUFFER,OUT_MAX*OUT_SCALE,IN_STRIDE,IN_MAX,IN_MAX>::load_all(buffer, src, inner_stride);
+      }
+    };
+
+    template<typename BUFFER, unsigned IN_STRIDE, unsigned IN_MAX, unsigned OUT_SCALE, unsigned OUT_STRIDE,
+    		unsigned OUT_MAX, unsigned OUT_IDX>
+    struct NestedConditionalStorer {
+      static __device__ __forceinline__
+      void store_all(const BUFFER &buffer, char *dst, unsigned outer_stride, unsigned inner_stride, unsigned actual_max)
+      {
+        if ((OUT_MAX-OUT_IDX) < actual_max)
+	    BufferStorer<BUFFER,(OUT_MAX-OUT_IDX)*OUT_SCALE,IN_STRIDE,IN_MAX,IN_MAX>::store_all(buffer, dst, inner_stride);
+	NestedConditionalStorer<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,OUT_MAX,OUT_IDX-OUT_STRIDE>::store_all(buffer,dst+outer_stride,outer_stride,inner_stride,actual_max);
+      }
+    };
+
+    template<typename BUFFER, unsigned IN_STRIDE, unsigned IN_MAX, unsigned OUT_SCALE, unsigned OUT_STRIDE>
+    struct NestedConditionalStorer<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,0,0>
+    {
+      static __device__ __forceinline__
+      void store_all(const BUFFER &buffer, char *dst, unsigned outer_stride, unsigned inner_stride, unsigned actual_max)
+      {
+	// do nothing
+      }
+    };
+
+    template<typename BUFFER, unsigned IN_STRIDE, unsigned IN_MAX, unsigned OUT_SCALE, unsigned OUT_STRIDE, unsigned OUT_MAX>
+    struct NestedConditionalStorer<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,OUT_MAX,0>
+    {
+      static __device__ __forceinline__
+      void store_all(const BUFFER &buffer, char *dst, unsigned outer_stride, unsigned inner_stride, unsigned actual_max)
+      {
+        if ((OUT_MAX) < actual_max)
+	  BufferStorer<BUFFER,OUT_MAX*OUT_SCALE,IN_STRIDE,IN_MAX,IN_MAX>::store_all(buffer, dst, inner_stride);
       }
     };
 };
@@ -1584,12 +1714,16 @@ protected: // begin xfer functions
   				  	       const int src_elmt_stride, 
 					       const int intra_elmt_stride, const int partial_bytes)
   {
+#if 0
     const char *src_row_ptr = src_ptr;
     for (int row = 0; row < DMA_ROW_ITERS; row++)
     {
       CudaDMAMeta::BufferLoader<BulkBuffer,1,GUARD_UNDERFLOW(DMA_COL_ITERS-1),GUARD_UNDERFLOW(DMA_COL_ITERS-1)>::load_all(bulk_buffer, src_row_ptr, intra_elmt_stride);
       src_row_ptr += src_elmt_stride;
     }
+#else
+    CudaDMAMeta::NestedBufferLoader<BulkBuffer,1,GUARD_UNDERFLOW(DMA_COL_ITERS-1),DMA_COL_ITERS,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::load_all(bulk_buffer,src_ptr,src_elmt_stride,intra_elmt_stride);
+#endif
     if (!DMA_ALL_ACTIVE)
     {
       load_across<DMA_ROW_ITERS>(src_ptr+this->dma_partial_offset,
@@ -1602,12 +1736,16 @@ protected: // begin xfer functions
   						const int src_elmt_stride, const int intra_elmt_stride,
 						const int partial_bytes, const int row_iters)
   {
+#if 0
     const char *src_row_ptr = src_ptr;
     for (int row = 0; row < row_iters; row++)
     {
-      CudaDMAMeta::BufferLoader<BulkBuffer,1,GUARD_UNDERFLOW(DMA_COL_ITERS-1),GUARD_UNDERFLOW(DMA_COL_ITERS-1)>::load_all(bulk_buffer,src_row_ptr,intra_elmt_stride);
+      CudaDMAMeta::BufferLoader<BulkBuffer,0,1,GUARD_UNDERFLOW(DMA_COL_ITERS-1),GUARD_UNDERFLOW(DMA_COL_ITERS-1)>::load_all(bulk_buffer,src_row_ptr,intra_elmt_stride);
       src_row_ptr += src_elmt_stride;
     }
+#else
+    CudaDMAMeta::NestedConditionalLoader<BulkBuffer,1,GUARD_UNDERFLOW(DMA_COL_ITERS-1),DMA_COL_ITERS,1,GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1),GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1)>::load_all(bulk_buffer,src_ptr,src_elmt_stride,intra_elmt_stride,row_iters);
+#endif
     if (!DMA_ALL_ACTIVE)
     {
       load_across_upper<DMA_ROW_ITERS_UPPER>(src_ptr+this->dma_partial_offset,
@@ -1626,22 +1764,22 @@ protected: // begin xfer functions
         break;
       case 4:
 	{
-	  CudaDMAMeta::BufferLoader<AcrossBuffer1,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::load_all(across_one, src_ptr, src_elmt_stride);
+	  CudaDMAMeta::BufferLoader<AcrossBuffer1,0,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::load_all(across_one, src_ptr, src_elmt_stride);
 	  break;
 	}
       case 8:
 	{
-	  CudaDMAMeta::BufferLoader<AcrossBuffer2,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::load_all(across_two, src_ptr, src_elmt_stride);
+	  CudaDMAMeta::BufferLoader<AcrossBuffer2,0,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::load_all(across_two, src_ptr, src_elmt_stride);
 	  break;
 	}
       case 12:
       	{
-	  CudaDMAMeta::BufferLoader<AcrossBuffer3,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS)>::load_all(across_three, src_ptr, src_elmt_stride);
+	  CudaDMAMeta::BufferLoader<AcrossBuffer3,0,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS)>::load_all(across_three, src_ptr, src_elmt_stride);
 	  break;
 	}
       case 16:
         {
-	  CudaDMAMeta::BufferLoader<AcrossBuffer4,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::load_all(across_four, src_ptr, src_elmt_stride);
+	  CudaDMAMeta::BufferLoader<AcrossBuffer4,0,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::load_all(across_four, src_ptr, src_elmt_stride);
 	  break;
 	}
 #ifdef CUDADMA_DEBUG_ON
@@ -1860,12 +1998,16 @@ protected: // commit xfer functions
   __device__ __forceinline__ void store_strided(char *RESTRICT dst_ptr, const int dst_elmt_stride,
   						const int intra_elmt_stride, const int partial_bytes)
   {
+#if 0
     char *dst_row_ptr = dst_ptr;
     for (int row = 0; row < DMA_ROW_ITERS; row++)
     {
       CudaDMAMeta::BufferStorer<BulkBuffer,1,GUARD_UNDERFLOW(DMA_COL_ITERS-1),GUARD_UNDERFLOW(DMA_COL_ITERS-1)>::store_all(bulk_buffer,dst_row_ptr, intra_elmt_stride);
       dst_row_ptr += dst_elmt_stride;
     } 
+#else
+    CudaDMAMeta::NestedBufferStorer<BulkBuffer,1,GUARD_UNDERFLOW(DMA_COL_ITERS-1),DMA_COL_ITERS,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::store_all(bulk_buffer,dst_ptr,dst_elmt_stride,intra_elmt_stride);
+#endif
     if (!DMA_ALL_ACTIVE)
     { 
       store_across<DMA_ROW_ITERS>(dst_ptr+this->dma_partial_offset,
@@ -1878,12 +2020,16 @@ protected: // commit xfer functions
   						      const int intra_elmt_stride, const int partial_bytes,
 						      const int row_iters)
   {
+#if 0
     char *dst_row_ptr = dst_ptr;
     for (int row = 0; row < row_iters; row++)
     {
-      CudaDMAMeta::BufferStorer<BulkBuffer,1,GUARD_UNDERFLOW(DMA_COL_ITERS-1),GUARD_UNDERFLOW(DMA_COL_ITERS-1)>::store_all(bulk_buffer,dst_row_ptr,intra_elmt_stride);
+      CudaDMAMeta::BufferStorer<BulkBuffer,0,1,GUARD_UNDERFLOW(DMA_COL_ITERS-1),GUARD_UNDERFLOW(DMA_COL_ITERS-1)>::store_all(bulk_buffer,dst_row_ptr,intra_elmt_stride);
       dst_row_ptr += dst_elmt_stride;
     } 
+#else
+    CudaDMAMeta::NestedConditionalStorer<BulkBuffer,1,GUARD_UNDERFLOW(DMA_COL_ITERS-1),DMA_COL_ITERS,1,GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1),GUARD_UNDERFLOW(DMA_ROW_ITERS_UPPER-1)>::store_all(bulk_buffer,dst_ptr,dst_elmt_stride,intra_elmt_stride,row_iters);
+#endif
     if (!DMA_ALL_ACTIVE)
     { 
       store_across_upper<DMA_ROW_ITERS_UPPER>(dst_ptr+this->dma_partial_offset,
@@ -1901,22 +2047,22 @@ protected: // commit xfer functions
         break;
       case 4:
         {
-	  CudaDMAMeta::BufferStorer<AcrossBuffer1,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::store_all(across_one, dst_ptr, dst_elmt_stride);
+	  CudaDMAMeta::BufferStorer<AcrossBuffer1,0,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::store_all(across_one, dst_ptr, dst_elmt_stride);
 	  break;
 	}
       case 8:
 	{
-	  CudaDMAMeta::BufferStorer<AcrossBuffer2,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::store_all(across_two,dst_ptr, dst_elmt_stride);
+	  CudaDMAMeta::BufferStorer<AcrossBuffer2,0,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::store_all(across_two,dst_ptr, dst_elmt_stride);
 	  break;
 	}
       case 12:
 	{
-	  CudaDMAMeta::BufferStorer<AcrossBuffer3,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::store_all(across_three, dst_ptr, dst_elmt_stride);
+	  CudaDMAMeta::BufferStorer<AcrossBuffer3,0,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::store_all(across_three, dst_ptr, dst_elmt_stride);
 	  break;
 	}
       case 16:
 	{
-	  CudaDMAMeta::BufferStorer<AcrossBuffer4,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::store_all(across_four ,dst_ptr, dst_elmt_stride);
+	  CudaDMAMeta::BufferStorer<AcrossBuffer4,0,1,GUARD_UNDERFLOW(DMA_ROW_ITERS-1),GUARD_UNDERFLOW(DMA_ROW_ITERS-1)>::store_all(across_four ,dst_ptr, dst_elmt_stride);
 	  break;
 	}
 #ifdef CUDADMA_DEBUG_ON

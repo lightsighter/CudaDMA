@@ -29,8 +29,8 @@ __device__ __forceinline__ void ptx_cudaDMA_barrier_nonblocking (const int name,
 #define CUDADMA_BASE cudaDMA
 #define CUDADMA_DMA_TID (threadIdx.x-dma_threadIdx_start)
 #define WARP_SIZE 32
-#define GUARD_UNDERFLOW(expr) ((expr < 0) ? 0 : expr)
-#define GUARD_ZERO(expr) ((expr == 0) ? 1 : expr)
+#define GUARD_UNDERFLOW(expr) (((expr) < 0) ? 0 : (expr))
+#define GUARD_ZERO(expr) (((expr) == 0) ? 1 : (expr))
 #define GUARD_OVERFLOW(index,max) ((index < max) ? index : max-1)
 
 // Enable the restrict keyword to allow additional compiler optimizations
@@ -1377,8 +1377,10 @@ namespace CudaDMAMeta {
       void load_all(BUFFER &buffer, const char *src, int stride, int actual_max)
       {
 	if ((MAX-IDX) < actual_max)
+	{
 	  buffer.template perform_load<MAX-IDX>(src);
-	ConditionalLoader<BUFFER,STRIDE,MAX,IDX-STRIDE>::load_all(buffer, src+stride, stride, actual_max);
+	  ConditionalLoader<BUFFER,STRIDE,MAX,IDX-STRIDE>::load_all(buffer, src+stride, stride, actual_max);
+	}
       }
     };
 
@@ -1409,8 +1411,10 @@ namespace CudaDMAMeta {
       void store_all(const BUFFER &buffer, char *dst, int stride, int actual_max)
       {
 	if ((MAX-IDX) < actual_max)
+	{
 	  buffer.template perform_store<MAX-IDX>(dst);
-	ConditionalStorer<BUFFER,STRIDE,MAX,IDX-STRIDE>::store_all(buffer, dst+stride, stride, actual_max);
+	  ConditionalStorer<BUFFER,STRIDE,MAX,IDX-STRIDE>::store_all(buffer, dst+stride, stride, actual_max);
+	}
       }
     };
 
@@ -1443,8 +1447,10 @@ namespace CudaDMAMeta {
       void load_all(BUFFER &buffer, const char *src, unsigned outer_stride, unsigned inner_stride, unsigned actual_max)
       {
         if ((OUT_MAX-OUT_IDX) < actual_max)
-	    BufferLoader<BUFFER,(OUT_MAX-OUT_IDX)*OUT_SCALE,IN_STRIDE,IN_MAX,IN_MAX>::load_all(buffer, src, inner_stride);
-	NestedConditionalLoader<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,OUT_MAX,OUT_IDX-OUT_STRIDE>::load_all(buffer,src+outer_stride,outer_stride,inner_stride,actual_max);
+	{
+	  BufferLoader<BUFFER,(OUT_MAX-OUT_IDX)*OUT_SCALE,IN_STRIDE,IN_MAX,IN_MAX>::load_all(buffer, src, inner_stride);
+	  NestedConditionalLoader<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,OUT_MAX,OUT_IDX-OUT_STRIDE>::load_all(buffer,src+outer_stride,outer_stride,inner_stride,actual_max);
+        }
       }
     };
 
@@ -1476,8 +1482,10 @@ namespace CudaDMAMeta {
       void store_all(const BUFFER &buffer, char *dst, unsigned outer_stride, unsigned inner_stride, unsigned actual_max)
       {
         if ((OUT_MAX-OUT_IDX) < actual_max)
-	    BufferStorer<BUFFER,(OUT_MAX-OUT_IDX)*OUT_SCALE,IN_STRIDE,IN_MAX,IN_MAX>::store_all(buffer, dst, inner_stride);
-	NestedConditionalStorer<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,OUT_MAX,OUT_IDX-OUT_STRIDE>::store_all(buffer,dst+outer_stride,outer_stride,inner_stride,actual_max);
+	{
+	  BufferStorer<BUFFER,(OUT_MAX-OUT_IDX)*OUT_SCALE,IN_STRIDE,IN_MAX,IN_MAX>::store_all(buffer, dst, inner_stride);
+	  NestedConditionalStorer<BUFFER,IN_STRIDE,IN_MAX,OUT_SCALE,OUT_STRIDE,OUT_MAX,OUT_IDX-OUT_STRIDE>::store_all(buffer,dst+outer_stride,outer_stride,inner_stride,actual_max);
+	}
       }
     };
 

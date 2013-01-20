@@ -7,7 +7,7 @@ import math
 MAX_ELMT_SIZE=8192 # in floats
 MAX_DMA_WARPS=16
 
-def run_experiment(specialized,alignment,offset,elem_size,dma_warps,num_templates):
+def run_experiment(specialized,alignment,offset,register_bytes,elem_size,dma_warps,num_templates):
     f = open("params_directed.h",'w')
     if (specialized):
         f.write("#define PARAM_SPECIALIZED true\n")
@@ -15,6 +15,7 @@ def run_experiment(specialized,alignment,offset,elem_size,dma_warps,num_template
         f.write("#define PARAM_SPECIALIZED false\n");
     f.write("#define PARAM_ALIGNMENT "+str(alignment)+"\n")
     f.write("#define PARAM_OFFSET "+str(offset)+"\n")
+    f.write("#define PARAM_BYTES_PER_THREAD "+str(register_bytes)+"\n")
     f.write("#define PARAM_ELMT_SIZE "+str(elem_size*4)+"\n")
     f.write("#define PARAM_DMA_THREADS "+str(dma_warps*32)+"\n")
     f.write("#define PARAM_NUM_TEMPLATES "+str(num_templates)+"\n")
@@ -49,6 +50,7 @@ def run_random_experiments():
             offset = random.sample([0,2],1)[0]
         elif alignment==4:
             offset = random.sample([0,1,2,3],1)[0]
+        register_bytes = alignment * (random.sample([1,2,3,4,5,6,7,8],1)[0])
         #elem_size = int(math.ceil(random.triangular(1,MAX_ELMT_SIZE,256))) # Probably want to focus on more common element sizes
         elem_size = int(math.ceil(random.gauss(256,256)))
         if elem_size==0:
@@ -63,9 +65,9 @@ def run_random_experiments():
         #    below += 1
         specialized = random.randint(0,1)
         if specialized == 1:
-            run_experiment(True,alignment,offset,elem_size,warps,num_templates)
+            run_experiment(True,alignment,offset,register_bytes,elem_size,warps,num_templates)
         else:
-            run_experiment(False,alignment,offset,elem_size,warps,num_templates)
+            run_experiment(False,alignment,offset,register_bytes,elem_size,warps,num_templates)
     #print "Above "+str(above)+" Below "+str(below)
 
 def main():

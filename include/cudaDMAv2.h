@@ -833,6 +833,27 @@ protected:
 // CudaDMASequential
 //////////////////////////////////////////////////////////////////////////////////////////////////
 
+/**
+ * CudaDMASequential will transfer data in a contiguous block from one location to another.
+ * DO_SYNC - is warp-specialized or not
+ * ALIGNMENT - guaranteed alignment of all pointers passed to the instance
+ * BYTES_PER_THREAD - maximum number of bytes that can be used for buffering inside the instance
+ * BYTES_PER_ELMT - the size of the element to be transfered
+ * DMA_THREADS - the number of DMA Threads that are going to be statically allocated
+ */
+template<bool DO_SYNC, int ALIGNMENT, int BYTES_PER_THREAD=4*ALIGNMENT, int BYTES_PER_ELMT=0, int DMA_THREADS=0>
+class CudaDMASequential : public CudaDMA {
+public:
+  __device__ CudaDMASequential(const int dmaID,
+                               const int num_compute_threads,
+                               const int dma_threadIdx_start)
+    : CudaDMA(dmaID, DMA_THREADS, num_compute_threads, dma_threadIdx_start)
+  {
+    // This template should never be instantiated
+    STATIC_ASSERT(DO_SYNC && !DO_SYNC);
+  }
+};
+
 // Number of bytes handled by all DMA threads performing on full load
 #define FULL_LD_STRIDE (DMA_THREADS*ALIGNMENT)
 // Maximum number of loads that can be performed by a thread based on register constraints
@@ -855,26 +876,39 @@ protected:
 #define THREAD_PARTIAL_BYTES ((THREAD_LEFTOVER > ALIGNMENT) ? ALIGNMENT : \
                               (THREAD_LEFTOVER < 0) ? 0 : THREAD_LEFTOVER)
 
-/**
- * CudaDMASequential will transfer data in a contiguous block from one location to another.
- * DO_SYNC - is warp-specialized or not
- * ALIGNMENT - guaranteed alignment of all pointers passed to the instance
- * BYTES_PER_THREAD - maximum number of bytes that can be used for buffering inside the instance
- * BYTES_PER_ELMT - the size of the element to be transfered
- * DMA_THREADS - the number of DMA Threads that are going to be statically allocated
- */
-template<bool DO_SYNC, int ALIGNMENT, int BYTES_PER_THREAD=4*ALIGNMENT, int BYTES_PER_ELMT=0, int DMA_THREADS=0>
-class CudaDMASequential : public CudaDMA {
-public:
-  __device__ CudaDMASequential(const int dmaID,
-                               const int num_compute_threads,
-                               const int dma_threadIdx_start)
-    : CudaDMA(dmaID, DMA_THREADS, num_compute_threads, dma_threadIdx_start)
-  {
-    // This template should never be instantiated
-    STATIC_ASSERT(DO_SYNC && !DO_SYNC);
-  }
-};
+#define SEQUENTIAL_START_XFER_IMPL(GLOBAL_LOAD,LOAD_QUAL,STORE_QUAL)                          \
+    this->dma_src_ptr = ((const char*)src_ptr) + this->dma_offset;                            \
+    if (BULK_STEPS == 0)                                                                      \
+    {                                                                                         \
+      issue_loads<(REMAINING_BYTES>0),PARTIAL_LDS,GLOBAL_LOAD,LOAD_QUAL>(this->dma_src_ptr);  \
+    }                                                                                         \
+    else                                                                                      \
+    {                                                                                         \
+      issue_loads<false,BULK_LDS,GLOBAL_LOAD,LOAD_QUAL>(dma_src_ptr);                         \
+      this->dma_src_ptr += BULK_STEP_STRIDE;                                                  \
+    }
+
+#define SEQUENTIAL_WAIT_XFER_IMPL(GLOBAL_LOAD,LOAD_QUAL,STORE_QUAL)                           \
+    char *dst_off_ptr = ((char*)dst_ptr) + this->dma_offset;                                  \
+    if (BULK_STEPS == 0)                                                                      \
+    {                                                                                         \
+      issue_stores<(REMAINING_BYTES>0),PARTIAL_LDS,STORE_QUAL>(dst_off_ptr);                  \
+    }                                                                                         \
+    else                                                                                      \
+    {                                                                                         \
+      issue_stores<false,BULK_LDS,STORE_QUAL>(dst_off_ptr);                                   \
+      dst_off_ptr += BULK_STEP_STRIDE;                                                        \
+      for (int i = 0; i < (BULK_STEPS-1); i++)                                                \
+      {                                                                                       \
+        issue_loads<false,BULK_LDS,GLOBAL_LOAD,LOAD_QUAL>(this->dma_src_ptr);                 \
+        this->dma_src_ptr += BULK_STEP_STRIDE;                                                \
+        issue_stores<false,BULK_LDS,STORE_QUAL>(dst_off_ptr);                                 \
+        dst_off_ptr += BULK_STEP_STRIDE;                                                      \
+      }                                                                                       \
+      issue_loads<(REMAINING_BYTES>0),PARTIAL_LDS,GLOBAL_LOAD,LOAD_QUAL>(this->dma_src_ptr);  \
+      issue_stores<(REMAINING_BYTES>0),PARTIAL_LDS,STORE_QUAL>(dst_off_ptr);                  \
+    }
+
 
 #if 0
 // one template paramemters, warp-specialized
@@ -917,9 +951,6 @@ public:
 // three template parameters, warp-specialized 
 #define LOCAL_TYPENAME  float
 #define ALIGNMENT 4
-#define GLOBAL_LOAD false
-#define LOAD_QUAL   LOAD_CACHE_ALL
-#define STORE_QUAL  STORE_WRITE_BACK
 template<int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
 class CudaDMASequential<true,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS> : public CudaDMA {
 public:
@@ -942,45 +973,35 @@ public:
 
   __device__ __forceinline__ void start_xfer_async(const void *RESTRICT src_ptr)
   {
-    this->dma_src_ptr = ((const char*)src_ptr) + this->dma_offset;
-    if (BULK_STEPS == 0)
-    {
-      // Partial case
-      issue_loads<(REMAINING_BYTES>0),PARTIAL_LDS,GLOBAL_LOAD,LOAD_QUAL>(this->dma_src_ptr);
-    }
-    else
-    {
-      // Everybody issue their full complement of loads
-      issue_loads<false,BULK_LDS,GLOBAL_LOAD,LOAD_QUAL>(dma_src_ptr);
-      this->dma_src_ptr += BULK_STEP_STRIDE;
-    }
+    SEQUENTIAL_START_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK) 
   }
 
   __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)
   {
-    char *dst_off_ptr = ((char*)dst_ptr) + this->dma_offset;
     CudaDMA::template wait_for_dma_start();
-    if (BULK_STEPS == 0)
-    {
-      // Partial case
-      issue_stores<(REMAINING_BYTES>0),PARTIAL_LDS,STORE_QUAL>(dst_off_ptr);
-    }
-    else
-    {
-      issue_stores<false,BULK_LDS,STORE_QUAL>(dst_off_ptr); 
-      dst_off_ptr += BULK_STEP_STRIDE;
-      #pragma unroll
-      for (int i = 0; i < (BULK_STEPS-1); i++)
-      {
-        issue_loads<false,BULK_LDS,GLOBAL_LOAD,LOAD_QUAL>(this->dma_src_ptr);
-        this->dma_src_ptr += BULK_STEP_STRIDE;
-        issue_stores<false,BULK_LDS,STORE_QUAL>(dst_off_ptr);
-        dst_off_ptr += BULK_STEP_STRIDE;
-      }
-      // Handle the partial bytes
-      issue_loads<(REMAINING_BYTES>0),PARTIAL_LDS,GLOBAL_LOAD,LOAD_QUAL>(this->dma_src_ptr);
-      issue_stores<(REMAINING_BYTES>0),PARTIAL_LDS,STORE_QUAL>(dst_off_ptr);
-    }
+    SEQUENTIAL_WAIT_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK)
+    CudaDMA::template finish_async_dma();
+  }
+public:
+  // Qualified versions the above operations
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void execute_dma(const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)
+  {
+    start_xfer_async<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(src_ptr);
+    wait_xfer_finish<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(dst_ptr);
+  }
+
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void start_xfer_async(const void *RESTRICT src_ptr)
+  {
+    SEQUENTIAL_START_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)
+  }
+
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)
+  {
+    CudaDMA::template wait_for_dma_start();
+    SEQUENTIAL_WAIT_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)
     CudaDMA::template finish_async_dma();
   }
 private:
@@ -997,7 +1018,7 @@ private:
         case 0:
           break;
         case 4:
-          partial_buffer = ptx_cudaDMA_load<float,GLOBAL_LOAD,LOAD_QUAL>((LOCAL_TYPENAME*)partial_ptr); 
+          partial_buffer = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)partial_ptr); 
           break;
 #ifdef DEBUG_CUDADMA
         default:
@@ -1018,7 +1039,7 @@ private:
         case 0:
           break;
         case 4:
-          ptx_cudaDMA_store<float,STORE_QUAL>(partial_buffer, (LOCAL_TYPENAME*)partial_ptr);
+          ptx_cudaDMA_store<float,DMA_STORE_QUAL>(partial_buffer, (float*)partial_ptr);
           break;
 #ifdef DEBUG_CUDADMA
         default:
@@ -1037,50 +1058,639 @@ private:
 };
 #undef ALIGNMENT
 #undef LOCAL_TYPENAME
-#undef GLOBAL_LOAD
-#undef LOAD_QUAL
-#undef STORE_QUAL
 
-#if 0
+#define LOCAL_TYPENAME float2
+#define ALIGNMENT 8
 template<int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
-class CudaDMASequential<true,8,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS> : public CudaDMA {
+class CudaDMASequential<true,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS> : public CudaDMA {
 public:
   __device__ CudaDMASequential(const int dmaID,
                                const int num_compute_threads,
-                               const int dma_threadIdx_start);
-private:
-  float2 bulk_buffer[BYTES_PER_THREAD/sizeof(float2)];
-};
+                               const int dma_threadIdx_start)
+    : CudaDMA(dmaID, DMA_THREADS, num_compute_threads, dma_threadIdx_start),
+      dma_offset(THREAD_OFFSET),
+      dma_partial_bytes(THREAD_PARTIAL_BYTES)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  __device__ __forceinline__ void execute_dma(const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)
+  {
+    start_xfer_async(src_ptr);
+    wait_xfer_finish(dst_ptr);
+  }
 
+  __device__ __forceinline__ void start_xfer_async(const void *RESTRICT src_ptr)
+  {
+    SEQUENTIAL_START_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK) 
+  }
+
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)
+  {
+    CudaDMA::template wait_for_dma_start();
+    SEQUENTIAL_WAIT_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK)
+    CudaDMA::template finish_async_dma();
+  }
+public:
+  // Qualified versions the above operations
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void execute_dma(const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)
+  {
+    start_xfer_async<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(src_ptr);
+    wait_xfer_finish<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(dst_ptr);
+  }
+
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void start_xfer_async(const void *RESTRICT src_ptr)
+  {
+    SEQUENTIAL_START_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)
+  }
+
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)
+  {
+    CudaDMA::template wait_for_dma_start();
+    SEQUENTIAL_WAIT_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)
+    CudaDMA::template finish_async_dma();
+  }
+private:
+  // Helper methods
+  template<bool DMA_PARTIAL_BYTES, int DMA_FULL_LOADS, bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>
+  __device__ __forceinline__ void issue_loads(const void *RESTRICT src_ptr)
+  {
+    CudaDMAMeta::BufferLoader<BulkBuffer,0,1,GUARD_UNDERFLOW(DMA_FULL_LOADS),GUARD_UNDERFLOW(DMA_FULL_LOADS),DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(bulk_buffer, (const char*)src_ptr, FULL_LD_STRIDE);   
+    if (DMA_PARTIAL_BYTES)
+    {
+      const char *partial_ptr = ((const char*)src_ptr) + (DMA_FULL_LOADS*FULL_LD_STRIDE); 
+      switch (this->dma_partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          partial_buffer.x = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)partial_ptr); 
+          break;
+        case 8:
+          partial_buffer = ptx_cudaDMA_load<float2,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)partial_ptr);
+          break;
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+  template<bool DMA_PARTIAL_BYTES, int DMA_FULL_LOADS, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void issue_stores(void *RESTRICT dst_ptr)
+  {
+    CudaDMAMeta::BufferStorer<BulkBuffer,0,1,GUARD_UNDERFLOW(DMA_FULL_LOADS),GUARD_UNDERFLOW(DMA_FULL_LOADS),DMA_STORE_QUAL>::store_all(bulk_buffer, (char*)dst_ptr, FULL_LD_STRIDE);
+    if (DMA_PARTIAL_BYTES)
+    {
+      char *partial_ptr = ((char*)dst_ptr) + (DMA_FULL_LOADS*FULL_LD_STRIDE); 
+      switch (this->dma_partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          ptx_cudaDMA_store<float,DMA_STORE_QUAL>(partial_buffer.x, (float*)partial_ptr);
+          break;
+        case 8:
+          ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(partial_buffer, (float2*)partial_ptr);
+          break;
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  const int dma_offset;
+  const int dma_partial_bytes;
+  const char *dma_src_ptr;
+  typedef CudaDMAMeta::DMABuffer<LOCAL_TYPENAME,BYTES_PER_THREAD/ALIGNMENT> BulkBuffer;
+  BulkBuffer bulk_buffer;
+  float2 partial_buffer;
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float4
+#define ALIGNMENT 16
 template<int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
-class CudaDMASequential<true,16,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS> : public CudaDMA {
+class CudaDMASequential<true,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS> : public CudaDMA {
 public:
   __device__ CudaDMASequential(const int dmaID,
                                const int num_compute_threads,
-                               const int dma_threadIdx_start);
+                               const int dma_threadIdx_start)
+    : CudaDMA(dmaID, DMA_THREADS, num_compute_threads, dma_threadIdx_start),
+      dma_offset(THREAD_OFFSET),
+      dma_partial_bytes(THREAD_PARTIAL_BYTES)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  __device__ __forceinline__ void execute_dma(const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)
+  {
+    start_xfer_async(src_ptr);
+    wait_xfer_finish(dst_ptr);
+  }
+
+  __device__ __forceinline__ void start_xfer_async(const void *RESTRICT src_ptr)
+  {
+    SEQUENTIAL_START_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK) 
+  }
+
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)
+  {
+    CudaDMA::template wait_for_dma_start();
+    SEQUENTIAL_WAIT_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK)
+    CudaDMA::template finish_async_dma();
+  }
+public:
+  // Qualified versions the above operations
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void execute_dma(const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)
+  {
+    start_xfer_async<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(src_ptr);
+    wait_xfer_finish<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(dst_ptr);
+  }
+
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void start_xfer_async(const void *RESTRICT src_ptr)
+  {
+    SEQUENTIAL_START_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)
+  }
+
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)
+  {
+    CudaDMA::template wait_for_dma_start();
+    SEQUENTIAL_WAIT_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)
+    CudaDMA::template finish_async_dma();
+  }
 private:
-  float4 bulk_buffer[BYTES_PER_THREAD/sizeof(float4)];
+  // Helper methods
+  template<bool DMA_PARTIAL_BYTES, int DMA_FULL_LOADS, bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>
+  __device__ __forceinline__ void issue_loads(const void *RESTRICT src_ptr)
+  {
+    CudaDMAMeta::BufferLoader<BulkBuffer,0,1,GUARD_UNDERFLOW(DMA_FULL_LOADS),GUARD_UNDERFLOW(DMA_FULL_LOADS),DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(bulk_buffer, (const char*)src_ptr, FULL_LD_STRIDE);
+    if (DMA_PARTIAL_BYTES)
+    {
+      const char *partial_ptr = ((const char*)src_ptr) + (DMA_FULL_LOADS*FULL_LD_STRIDE); 
+      switch (this->dma_partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          partial_buffer.x = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)partial_ptr);
+          break;
+        case 8:
+          {
+            float2 temp2 = ptx_cudaDMA_load<float2,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)partial_ptr);
+            partial_buffer.x = temp2.x;
+            partial_buffer.y = temp2.y;
+            break;
+          }
+        case 12:
+          {
+            float3 temp3 = ptx_cudaDMA_load<float3,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float3*)partial_ptr);
+            partial_buffer.x = temp3.x;
+            partial_buffer.y = temp3.y;
+            partial_buffer.z = temp3.z;
+            break;
+          }
+        case 16:
+          partial_buffer = ptx_cudaDMA_load<float4,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float4*)partial_ptr);
+          break;
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+  template<bool DMA_PARTIAL_BYTES, int DMA_FULL_LOADS, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void issue_stores(void *RESTRICT dst_ptr)
+  {
+    CudaDMAMeta::BufferStorer<BulkBuffer,0,1,GUARD_UNDERFLOW(DMA_FULL_LOADS),GUARD_UNDERFLOW(DMA_FULL_LOADS),DMA_STORE_QUAL>::store_all(bulk_buffer, (char*)dst_ptr, FULL_LD_STRIDE);
+    if (DMA_PARTIAL_BYTES)
+    {
+      char *partial_ptr = ((char*)dst_ptr) + (DMA_FULL_LOADS*FULL_LD_STRIDE); 
+      switch (this->dma_partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          ptx_cudaDMA_store<float,DMA_STORE_QUAL>(partial_buffer.x, (float*)partial_ptr);
+          break;
+        case 8:
+          float2 temp2;
+          temp2.x = partial_buffer.x;
+          temp2.y = partial_buffer.y;
+          ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(temp2, (float2*)partial_ptr);
+          break;
+        case 12:
+          float3 temp3;
+          temp3.x = partial_buffer.x;
+          temp3.y = partial_buffer.y;
+          temp3.z = partial_buffer.z;
+          ptx_cudaDMA_store<float3,DMA_STORE_QUAL>(temp3, (float3*)partial_ptr);
+          break;
+        case 16:
+          ptx_cudaDMA_store<float4,DMA_STORE_QUAL>(partial_buffer, (float4*)partial_ptr);
+          break;
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  const int dma_offset;
+  const int dma_partial_bytes;
+  const char *dma_src_ptr;
+  typedef CudaDMAMeta::DMABuffer<LOCAL_TYPENAME,BYTES_PER_THREAD/ALIGNMENT> BulkBuffer;
+  BulkBuffer bulk_buffer;
+  float4 partial_buffer;
 };
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
 
 // three template parameters, non-warp-specialized
+#define LOCAL_TYPENAME float
+#define ALIGNMENT 4
 template<int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
-class CudaDMASequential<false,4,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS> : public CudaDMA {
+class CudaDMASequential<false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS> : public CudaDMA {
 public:
-  __device__ CudaDMASequentil(void);
-};
+  __device__ CudaDMASequential(const int dma_threadIdx_start = 0)
+    : CudaDMA(0, DMA_THREADS, DMA_THREADS, dma_threadIdx_start),
+      dma_offset(THREAD_OFFSET),
+      dma_partial_bytes(THREAD_PARTIAL_BYTES)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  __device__ __forceinline__ void execute_dma(const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)
+  {
+    start_xfer_async(src_ptr);
+    wait_xfer_finish(dst_ptr);
+  }
 
-template<int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
-class CudaDMASequential<false,8,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS> : public CudaDMA {
-public:
-  __device__ CudaDMASequentil(void);
-};
+  __device__ __forceinline__ void start_xfer_async(const void *RESTRICT src_ptr)
+  {
+    SEQUENTIAL_START_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK) 
+  }
 
-template<int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
-class CudaDMASequential<false,16,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS> : public CudaDMA {
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)
+  {
+    // No synchronization here for non-warp-specialized
+    SEQUENTIAL_WAIT_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK)
+  }
 public:
-  __device__ CudaDMASequentil(void);
-};
+  // Qualified versions the above operations
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void execute_dma(const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)
+  {
+    start_xfer_async<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(src_ptr);
+    wait_xfer_finish<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(dst_ptr);
+  }
+
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void start_xfer_async(const void *RESTRICT src_ptr)
+  {
+    SEQUENTIAL_START_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)
+  }
+
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)
+  {
+    // No synchronization here for non-warp-specialized
+    SEQUENTIAL_WAIT_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)
+  }
+private:
+  // Helper methods
+  template<bool DMA_PARTIAL_BYTES, int DMA_FULL_LOADS, bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>
+  __device__ __forceinline__ void issue_loads(const void *RESTRICT src_ptr)
+  {
+    CudaDMAMeta::BufferLoader<BulkBuffer,0,1,GUARD_UNDERFLOW(DMA_FULL_LOADS),GUARD_UNDERFLOW(DMA_FULL_LOADS),DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(bulk_buffer, (const char*)src_ptr, FULL_LD_STRIDE);   
+    if (DMA_PARTIAL_BYTES)
+    {
+      const char *partial_ptr = ((const char*)src_ptr) + (DMA_FULL_LOADS*FULL_LD_STRIDE); 
+      switch (this->dma_partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          partial_buffer = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)partial_ptr); 
+          break;
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
 #endif
+      }
+    }
+  }
+  template<bool DMA_PARTIAL_BYTES, int DMA_FULL_LOADS, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void issue_stores(void *RESTRICT dst_ptr)
+  {
+    CudaDMAMeta::BufferStorer<BulkBuffer,0,1,GUARD_UNDERFLOW(DMA_FULL_LOADS),GUARD_UNDERFLOW(DMA_FULL_LOADS),DMA_STORE_QUAL>::store_all(bulk_buffer, (char*)dst_ptr, FULL_LD_STRIDE);
+    if (DMA_PARTIAL_BYTES)
+    {
+      char *partial_ptr = ((char*)dst_ptr) + (DMA_FULL_LOADS*FULL_LD_STRIDE); 
+      switch (this->dma_partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          ptx_cudaDMA_store<float,DMA_STORE_QUAL>(partial_buffer, (float*)partial_ptr);
+          break;
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  const int dma_offset;
+  const int dma_partial_bytes;
+  const char *dma_src_ptr;
+  typedef CudaDMAMeta::DMABuffer<LOCAL_TYPENAME,BYTES_PER_THREAD/ALIGNMENT> BulkBuffer;
+  BulkBuffer bulk_buffer;
+  float partial_buffer;
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float2
+#define ALIGNMENT 8
+template<int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
+class CudaDMASequential<false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS> : public CudaDMA {
+public:
+  __device__ CudaDMASequential(const int dma_threadIdx_start = 0)
+    : CudaDMA(0, DMA_THREADS, DMA_THREADS, dma_threadIdx_start),
+      dma_offset(THREAD_OFFSET),
+      dma_partial_bytes(THREAD_PARTIAL_BYTES)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  __device__ __forceinline__ void execute_dma(const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)
+  {
+    start_xfer_async(src_ptr);
+    wait_xfer_finish(dst_ptr);
+  }
+
+  __device__ __forceinline__ void start_xfer_async(const void *RESTRICT src_ptr)
+  {
+    SEQUENTIAL_START_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK) 
+  }
+
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)
+  {
+    // No synchronization here
+    SEQUENTIAL_WAIT_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK)
+  }
+public:
+  // Qualified versions the above operations
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void execute_dma(const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)
+  {
+    start_xfer_async<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(src_ptr);
+    wait_xfer_finish<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(dst_ptr);
+  }
+
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void start_xfer_async(const void *RESTRICT src_ptr)
+  {
+    SEQUENTIAL_START_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)
+  }
+
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)
+  {
+    // No synchroniztion here
+    SEQUENTIAL_WAIT_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)
+  }
+private:
+  // Helper methods
+  template<bool DMA_PARTIAL_BYTES, int DMA_FULL_LOADS, bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>
+  __device__ __forceinline__ void issue_loads(const void *RESTRICT src_ptr)
+  {
+    CudaDMAMeta::BufferLoader<BulkBuffer,0,1,GUARD_UNDERFLOW(DMA_FULL_LOADS),GUARD_UNDERFLOW(DMA_FULL_LOADS),DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(bulk_buffer, (const char*)src_ptr, FULL_LD_STRIDE);   
+    if (DMA_PARTIAL_BYTES)
+    {
+      const char *partial_ptr = ((const char*)src_ptr) + (DMA_FULL_LOADS*FULL_LD_STRIDE); 
+      switch (this->dma_partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          partial_buffer.x = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)partial_ptr); 
+          break;
+        case 8:
+          partial_buffer = ptx_cudaDMA_load<float2,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)partial_ptr);
+          break;
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+  template<bool DMA_PARTIAL_BYTES, int DMA_FULL_LOADS, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void issue_stores(void *RESTRICT dst_ptr)
+  {
+    CudaDMAMeta::BufferStorer<BulkBuffer,0,1,GUARD_UNDERFLOW(DMA_FULL_LOADS),GUARD_UNDERFLOW(DMA_FULL_LOADS),DMA_STORE_QUAL>::store_all(bulk_buffer, (char*)dst_ptr, FULL_LD_STRIDE);
+    if (DMA_PARTIAL_BYTES)
+    {
+      char *partial_ptr = ((char*)dst_ptr) + (DMA_FULL_LOADS*FULL_LD_STRIDE); 
+      switch (this->dma_partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          ptx_cudaDMA_store<float,DMA_STORE_QUAL>(partial_buffer.x, (float*)partial_ptr);
+          break;
+        case 8:
+          ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(partial_buffer, (float2*)partial_ptr);
+          break;
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  const int dma_offset;
+  const int dma_partial_bytes;
+  const char *dma_src_ptr;
+  typedef CudaDMAMeta::DMABuffer<LOCAL_TYPENAME,BYTES_PER_THREAD/ALIGNMENT> BulkBuffer;
+  BulkBuffer bulk_buffer;
+  float2 partial_buffer;
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float4
+#define ALIGNMENT 16
+template<int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
+class CudaDMASequential<false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS> : public CudaDMA {
+public:
+  __device__ CudaDMASequential(const int dma_threadIdx_start = 0)
+    : CudaDMA(0, DMA_THREADS, DMA_THREADS, dma_threadIdx_start),
+      dma_offset(THREAD_OFFSET),
+      dma_partial_bytes(THREAD_PARTIAL_BYTES)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  __device__ __forceinline__ void execute_dma(const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)
+  {
+    start_xfer_async(src_ptr);
+    wait_xfer_finish(dst_ptr);
+  }
+
+  __device__ __forceinline__ void start_xfer_async(const void *RESTRICT src_ptr)
+  {
+    SEQUENTIAL_START_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK) 
+  }
+
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)
+  {
+    // No synchronization here
+    SEQUENTIAL_WAIT_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK)
+  }
+public:
+  // Qualified versions the above operations
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void execute_dma(const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)
+  {
+    start_xfer_async<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(src_ptr);
+    wait_xfer_finish<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(dst_ptr);
+  }
+
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void start_xfer_async(const void *RESTRICT src_ptr)
+  {
+    SEQUENTIAL_START_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)
+  }
+
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)
+  {
+    // No synchronization here
+    SEQUENTIAL_WAIT_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)
+  }
+private:
+  // Helper methods
+  template<bool DMA_PARTIAL_BYTES, int DMA_FULL_LOADS, bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>
+  __device__ __forceinline__ void issue_loads(const void *RESTRICT src_ptr)
+  {
+    CudaDMAMeta::BufferLoader<BulkBuffer,0,1,GUARD_UNDERFLOW(DMA_FULL_LOADS),GUARD_UNDERFLOW(DMA_FULL_LOADS),DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(bulk_buffer, (const char*)src_ptr, FULL_LD_STRIDE);
+    if (DMA_PARTIAL_BYTES)
+    {
+      const char *partial_ptr = ((const char*)src_ptr) + (DMA_FULL_LOADS*FULL_LD_STRIDE); 
+      switch (this->dma_partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          partial_buffer.x = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)partial_ptr);
+          break;
+        case 8:
+          {
+            float2 temp2 = ptx_cudaDMA_load<float2,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)partial_ptr);
+            partial_buffer.x = temp2.x;
+            partial_buffer.y = temp2.y;
+            break;
+          }
+        case 12:
+          {
+            float3 temp3 = ptx_cudaDMA_load<float3,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float3*)partial_ptr);
+            partial_buffer.x = temp3.x;
+            partial_buffer.y = temp3.y;
+            partial_buffer.z = temp3.z;
+            break;
+          }
+        case 16:
+          partial_buffer = ptx_cudaDMA_load<float4,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float4*)partial_ptr);
+          break;
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+  template<bool DMA_PARTIAL_BYTES, int DMA_FULL_LOADS, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void issue_stores(void *RESTRICT dst_ptr)
+  {
+    CudaDMAMeta::BufferStorer<BulkBuffer,0,1,GUARD_UNDERFLOW(DMA_FULL_LOADS),GUARD_UNDERFLOW(DMA_FULL_LOADS),DMA_STORE_QUAL>::store_all(bulk_buffer, (char*)dst_ptr, FULL_LD_STRIDE);
+    if (DMA_PARTIAL_BYTES)
+    {
+      char *partial_ptr = ((char*)dst_ptr) + (DMA_FULL_LOADS*FULL_LD_STRIDE); 
+      switch (this->dma_partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          ptx_cudaDMA_store<float,DMA_STORE_QUAL>(partial_buffer.x, (float*)partial_ptr);
+          break;
+        case 8:
+          float2 temp2;
+          temp2.x = partial_buffer.x;
+          temp2.y = partial_buffer.y;
+          ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(temp2, (float2*)partial_ptr);
+          break;
+        case 12:
+          float3 temp3;
+          temp3.x = partial_buffer.x;
+          temp3.y = partial_buffer.y;
+          temp3.z = partial_buffer.z;
+          ptx_cudaDMA_store<float3,DMA_STORE_QUAL>(temp3, (float3*)partial_ptr);
+          break;
+        case 16:
+          ptx_cudaDMA_store<float4,DMA_STORE_QUAL>(partial_buffer, (float4*)partial_ptr);
+          break;
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  const int dma_offset;
+  const int dma_partial_bytes;
+  const char *dma_src_ptr;
+  typedef CudaDMAMeta::DMABuffer<LOCAL_TYPENAME,BYTES_PER_THREAD/ALIGNMENT> BulkBuffer;
+  BulkBuffer bulk_buffer;
+  float4 partial_buffer;
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#undef FULL_LD_STRIDE
+#undef BULK_LDS
+#undef BULK_STEP_STRIDE
+#undef BULK_STEPS
+#undef PARTIAL_BYTES
+#undef PARTIAL_LDS
+#undef REMAINING_BYTES
+#undef THREAD_OFFSET
+#undef THREAD_LEFTOVER
+#undef THREAD_PARTIAL_BYTES
+#undef SEQUENTIAL_START_XFER_IMPL
+#undef SEQUENTIAL_WAIT_XFER_IMPL
+////////////////////////  End of CudaDMASequential //////////////////////////////////////////////////
 
 #undef WARP_SIZE
 #undef WARP_MASK

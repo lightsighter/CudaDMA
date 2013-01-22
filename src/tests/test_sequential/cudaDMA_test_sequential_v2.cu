@@ -29,8 +29,7 @@
 #include "cuda.h"
 #include "cuda_runtime.h"
 
-//#define CUDADMA_DEBUG_ON
-#include "cudaDMA.h"
+#include "cudaDMAv2.h"
 
 #include "params_directed.h"
 
@@ -52,7 +51,7 @@
 
 template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
 __global__ void __launch_bounds__(1024,1)
-dma_xfer_three( float *idata, float *odata, int buffer_size, int num_compute_threads)
+special_xfer_three( float *idata, float *odata, int buffer_size, int num_compute_threads, const bool single, const bool qualified)
 {
   extern __shared__ float buffer[];
 
@@ -63,12 +62,26 @@ dma_xfer_three( float *idata, float *odata, int buffer_size, int num_compute_thr
   if (dma0.owns_this_thread())
   {
     float *base_ptr = &(idata[ALIGN_OFFSET]);
-#ifdef CUDADMA_DEBUG_ON
-    dma0.wait_for_dma_start();
-    dma0.finish_async_dma();
-#else
-    dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
-#endif
+    if (single)
+    {
+      if (qualified)
+        dma0.template execute_dma<true,LOAD_CACHE_GLOBAL,STORE_CACHE_GLOBAL>(base_ptr, &(buffer[ALIGN_OFFSET])); 
+      else
+        dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+    }
+    else
+    {
+      if (qualified)
+      {
+        dma0.template start_xfer_async<true,LOAD_CACHE_GLOBAL,STORE_CACHE_STREAMING>(base_ptr);
+        dma0.template wait_xfer_finish<true,LOAD_CACHE_GLOBAL,STORE_CACHE_STREAMING>(&(buffer[ALIGN_OFFSET]));
+      }
+      else
+      {
+        dma0.start_xfer_async(base_ptr);
+        dma0.wait_xfer_finish(&(buffer[ALIGN_OFFSET]));
+      }
+    }
   }
   else
   {
@@ -102,7 +115,7 @@ dma_xfer_three( float *idata, float *odata, int buffer_size, int num_compute_thr
 
 template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_THREAD, int BYTES_PER_ELMT>
 __global__ void __launch_bounds__(1024,1)
-dma_xfer_two( float *idata, float *odata, int buffer_size, int num_compute_threads, int num_dma_threads)
+special_xfer_two( float *idata, float *odata, int buffer_size, int num_compute_threads, int num_dma_threads, const bool single, const bool qualified)
 {
   extern __shared__ float buffer[];
 
@@ -113,12 +126,26 @@ dma_xfer_two( float *idata, float *odata, int buffer_size, int num_compute_threa
   if (dma0.owns_this_thread())
   {
     float *base_ptr = &(idata[ALIGN_OFFSET]);
-#ifdef CUDADMA_DEBUG_ON
-    dma0.wait_for_dma_start();
-    dma0.finish_async_dma();
-#else
-    dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
-#endif
+    if (single)
+    {
+      if (qualified)
+        dma0.template execute_dma<true,LOAD_CACHE_GLOBAL,STORE_CACHE_WRITE_THROUGH>(base_ptr, &(buffer[ALIGN_OFFSET])); 
+      else
+        dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+    }
+    else
+    {
+      if (qualified)
+      {
+        dma0.template start_xfer_async<true,LOAD_CACHE_STREAMING,STORE_CACHE_GLOBAL>(base_ptr);
+        dma0.template wait_xfer_finish<true,LOAD_CACHE_STREAMING,STORE_CACHE_GLOBAL>(&(buffer[ALIGN_OFFSET]));
+      }
+      else
+      {
+        dma0.start_xfer_async(base_ptr);
+        dma0.wait_xfer_finish(&(buffer[ALIGN_OFFSET]));
+      }
+    }
   }
   else
   {
@@ -152,7 +179,7 @@ dma_xfer_two( float *idata, float *odata, int buffer_size, int num_compute_threa
 
 template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_THREAD>
 __global__ void __launch_bounds__(1024,1)
-dma_xfer_one( float *idata, float *odata, int buffer_size, int num_compute_threads, int num_dma_threads, int bytes_per_elmt)
+special_xfer_one( float *idata, float *odata, int buffer_size, int num_compute_threads, int num_dma_threads, int bytes_per_elmt, const bool single, const bool qualified)
 {
   extern __shared__ float buffer[];
 
@@ -163,12 +190,26 @@ dma_xfer_one( float *idata, float *odata, int buffer_size, int num_compute_threa
   if (dma0.owns_this_thread())
   {
     float *base_ptr = &(idata[ALIGN_OFFSET]);
-#ifdef CUDADMA_DEBUG_ON
-    dma0.wait_for_dma_start();
-    dma0.finish_async_dma();
-#else
-    dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
-#endif
+    if (single)
+    {
+      if (qualified)
+        dma0.template execute_dma<true,LOAD_CACHE_STREAMING,STORE_CACHE_STREAMING>(base_ptr, &(buffer[ALIGN_OFFSET])); 
+      else
+        dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+    }
+    else
+    {
+      if (qualified)
+      {
+        dma0.template start_xfer_async<true,LOAD_CACHE_STREAMING,STORE_CACHE_WRITE_THROUGH>(base_ptr);
+        dma0.template wait_xfer_finish<true,LOAD_CACHE_STREAMING,STORE_CACHE_WRITE_THROUGH>(&(buffer[ALIGN_OFFSET]));
+      }
+      else
+      {
+        dma0.start_xfer_async(base_ptr);
+        dma0.wait_xfer_finish(&(buffer[ALIGN_OFFSET]));
+      }
+    }
   }
   else
   {
@@ -202,7 +243,7 @@ dma_xfer_one( float *idata, float *odata, int buffer_size, int num_compute_threa
 
 template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
 __global__ void __launch_bounds__(1024,1)
-simple_xfer_three( float *idata, float *odata, int buffer_size )
+nonspec_xfer_three( float *idata, float *odata, int buffer_size, const bool single, const bool qualified)
 {
   extern __shared__ float buffer[];
 
@@ -222,7 +263,26 @@ simple_xfer_three( float *idata, float *odata, int buffer_size )
   __syncthreads();
   // Perform the transfer
   float *base_ptr = &(idata[ALIGN_OFFSET]);
-  dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+  if (single)
+  {
+    if (qualified)
+      dma0.template execute_dma<true,LOAD_CACHE_LAST_USE,STORE_CACHE_GLOBAL>(base_ptr,&(buffer[ALIGN_OFFSET])); 
+    else
+      dma0.execute_dma(base_ptr,&(buffer[ALIGN_OFFSET]));
+  }
+  else
+  {
+    if (qualified)
+    {
+      dma0.template start_xfer_async<true,LOAD_CACHE_LAST_USE,STORE_CACHE_STREAMING>(base_ptr);
+      dma0.template wait_xfer_finish<true,LOAD_CACHE_LAST_USE,STORE_CACHE_STREAMING>(&(buffer[ALIGN_OFFSET]));
+    }
+    else
+    {
+      dma0.start_xfer_async(base_ptr);
+      dma0.wait_xfer_finish(&(buffer[ALIGN_OFFSET]));
+    }
+  }
   __syncthreads();
   // Now read the buffer out of shared and write the results back
   index = threadIdx.x;
@@ -237,7 +297,7 @@ simple_xfer_three( float *idata, float *odata, int buffer_size )
 
 template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_THREAD, int BYTES_PER_ELMT>
 __global__ void __launch_bounds__(1024,1)
-simple_xfer_two( float *idata, float *odata, int buffer_size)
+nonspec_xfer_two( float *idata, float *odata, int buffer_size, const bool single, const bool qualified)
 {
   extern __shared__ float buffer[];
 
@@ -257,7 +317,26 @@ simple_xfer_two( float *idata, float *odata, int buffer_size)
   __syncthreads();
   // Perform the transfer
   float *base_ptr = &(idata[ALIGN_OFFSET]);
-  dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+  if (single)
+  {
+    if (qualified)
+      dma0.template execute_dma<true,LOAD_CACHE_LAST_USE,STORE_CACHE_WRITE_THROUGH>(base_ptr,&(buffer[ALIGN_OFFSET])); 
+    else
+      dma0.execute_dma(base_ptr,&(buffer[ALIGN_OFFSET]));
+  }
+  else
+  {
+    if (qualified)
+    {
+      dma0.template start_xfer_async<true,LOAD_CACHE_VOLATILE,STORE_CACHE_GLOBAL>(base_ptr);
+      dma0.template wait_xfer_finish<true,LOAD_CACHE_VOLATILE,STORE_CACHE_GLOBAL>(&(buffer[ALIGN_OFFSET]));
+    }
+    else
+    {
+      dma0.start_xfer_async(base_ptr);
+      dma0.wait_xfer_finish(&(buffer[ALIGN_OFFSET]));
+    }
+  }
   __syncthreads();
   // Now read the buffer out of shared and write the results back
   index = threadIdx.x;
@@ -272,7 +351,7 @@ simple_xfer_two( float *idata, float *odata, int buffer_size)
 
 template<int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_THREAD>
 __global__ void __launch_bounds__(1024,1)
-simple_xfer_one( float *idata, float *odata, int buffer_size, int bytes_per_elmt)
+nonspec_xfer_one( float *idata, float *odata, int buffer_size, int bytes_per_elmt, const bool single, const bool qualified)
 {
   extern __shared__ float buffer[];
 
@@ -292,7 +371,26 @@ simple_xfer_one( float *idata, float *odata, int buffer_size, int bytes_per_elmt
   __syncthreads();
   // perform the transfer
   float *base_ptr = &(idata[ALIGN_OFFSET]);
-  dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
+  if (single)
+  {
+    if (qualified)
+      dma0.template execute_dma<true,LOAD_CACHE_VOLATILE,STORE_CACHE_STREAMING>(base_ptr,&(buffer[ALIGN_OFFSET])); 
+    else
+      dma0.execute_dma(base_ptr,&(buffer[ALIGN_OFFSET]));
+  }
+  else
+  {
+    if (qualified)
+    {
+      dma0.template start_xfer_async<true,LOAD_CACHE_VOLATILE,STORE_CACHE_WRITE_THROUGH>(base_ptr);
+      dma0.template wait_xfer_finish<true,LOAD_CACHE_VOLATILE,STORE_CACHE_WRITE_THROUGH>(&(buffer[ALIGN_OFFSET]));
+    }
+    else
+    {
+      dma0.start_xfer_async(base_ptr);
+      dma0.wait_xfer_finish(&(buffer[ALIGN_OFFSET]));
+    }
+  }
   __syncthreads();
   index = threadIdx.x;
   for (int i = 0; i<iters; i++)
@@ -304,8 +402,8 @@ simple_xfer_one( float *idata, float *odata, int buffer_size, int bytes_per_elmt
     odata[index] = buffer[index];
 }
 
-template<bool SPECIALIZED, int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_TEMPLATE_PARAMS>
-__host__ bool run_experiment(void)
+template<bool SPECIALIZED, int ALIGNMENT, int ALIGN_OFFSET, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
+__host__ bool run_experiment(bool single, bool qualified, int num_templates)
 {
   int shared_buffer_size = (BYTES_PER_ELMT/sizeof(float)+ALIGN_OFFSET);
   if ((shared_buffer_size*sizeof(float)) > 41952)
@@ -339,38 +437,37 @@ __host__ bool run_experiment(void)
     total_threads = DMA_THREADS;
   assert(total_threads>0);
 
-  switch (NUM_TEMPLATE_PARAMS)
+  switch (num_templates)
   {
   case 3:
     {
     if (SPECIALIZED)
     {
-      dma_xfer_three<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS>
+      special_xfer_three<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS>
         <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-        (d_idata, d_odata, shared_buffer_size, num_compute_warps*WARP_SIZE);
+        (d_idata, d_odata, shared_buffer_size, num_compute_warps*WARP_SIZE,single,qualified);
     }
     else
     {
-      simple_xfer_three<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS>
+      nonspec_xfer_three<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS>
         <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-        (d_idata, d_odata, shared_buffer_size);
+        (d_idata, d_odata, shared_buffer_size,single,qualified);
     }
     break;
     }
-#if 0
   case 2:
     {
     if (SPECIALIZED)
     {
-      dma_xfer_two<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_THREAD,BYTES_PER_ELMT>
+      special_xfer_two<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_THREAD,BYTES_PER_ELMT>
         <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-        (d_idata, d_odata, shared_buffer_size, num_compute_warps*WARP_SIZE, DMA_THREADS);
+        (d_idata, d_odata, shared_buffer_size, num_compute_warps*WARP_SIZE, DMA_THREADS,single,qualified);
     }
     else
     {
-      simple_xfer_two<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_THREAD,BYTES_PER_ELMT>
+      nonspec_xfer_two<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_THREAD,BYTES_PER_ELMT>
         <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-        (d_idata, d_odata, shared_buffer_size);
+        (d_idata, d_odata, shared_buffer_size,single,qualified);
     }
     break;
     }
@@ -378,19 +475,18 @@ __host__ bool run_experiment(void)
     {
     if (SPECIALIZED)
     {
-      dma_xfer_one<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_THREAD>
+      special_xfer_one<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_THREAD>
         <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-        (d_idata, d_odata, shared_buffer_size, num_compute_warps*WARP_SIZE, DMA_THREADS, BYTES_PER_ELMT);
+        (d_idata, d_odata, shared_buffer_size, num_compute_warps*WARP_SIZE, DMA_THREADS, BYTES_PER_ELMT,single,qualified);
     }
     else
     {
-      simple_xfer_one<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_THREAD>
+      nonspec_xfer_one<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_THREAD>
         <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-        (d_idata, d_odata, shared_buffer_size, BYTES_PER_ELMT);
+        (d_idata, d_odata, shared_buffer_size, BYTES_PER_ELMT,single,qualified);
     }
     break;
     }
-#endif
   default:
     assert(false);
   }
@@ -412,9 +508,8 @@ __host__ bool run_experiment(void)
       break;
     }
   }
-  if (!pass)
   {
-    fprintf(stdout,"Result - %s\n",(pass?"SUCCESS":"FAILURE"));
+    fprintf(stdout," - %s\n",(pass?"PASS":"FAIL"));
     fflush(stdout);
   }
 
@@ -429,13 +524,94 @@ __host__ bool run_experiment(void)
 __host__
 int main()
 {
-  if (PARAM_SPECIALIZED)
-    fprintf(stdout,"Warp-Specialized Experiment: ALIGNMENT-%2d OFFSET-%d BYTES_PER_THREAD-%5d ELMT_SIZE-%5d DMA_WARPS-%2d NUM_TEMPLATES-%d ",PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS/WARP_SIZE,PARAM_NUM_TEMPLATES);
-  else
-    fprintf(stdout,"Non-Warp-Specialized Experiment: ALIGNMENT-%2d OFFSET-%d BYTES_PER_THREAD-%5d ELMT_SIZE-%5d TOTAL_WARPS-%2d NUM_TEMPLATES-%d ",PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS/WARP_SIZE,PARAM_NUM_TEMPLATES);
-  fflush(stdout);
-  bool result = run_experiment<PARAM_SPECIALIZED,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS,PARAM_NUM_TEMPLATES>();
-  fprintf(stdout,"RESULT: %s\n",(result?"SUCCESS":"FAILURE"));
+  bool result = true;
+  fprintf(stdout,"Running all experiments for ALIGNMENT-%2d OFFSET-%d BYTES_PER_THREAD-%3d ELMT_SIZE-%5d DMA_WARPS-%2d\n",PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS/WARP_SIZE);
+  fprintf(stdout,"  Warp-Specialized Experiments\n");
+  fprintf(stdout,"    Single-Phase Experiments\n");
+  fprintf(stdout,"      Unqualified experiments\n");
+  fprintf(stdout,"        Templates-1");
+  result = run_experiment<true,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(true/*single*/,false/*qualified*/,1);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-2");
+  result = run_experiment<true,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(true/*single*/,false/*qualified*/,2);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-3");
+  result = run_experiment<true,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(true/*single*/,false/*qualified*/,3);
+  if (!result) return result;
+  fprintf(stdout,"      Qualified Experiments\n");
+  fprintf(stdout,"        Templates-1");
+  result = run_experiment<true,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(true/*single*/,true/*qualified*/,1);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-2");
+  result = run_experiment<true,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(true/*single*/,true/*qualified*/,2);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-3");
+  result = run_experiment<true,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(true/*single*/,true/*qualified*/,3);
+  if (!result) return result;
+  fprintf(stdout,"    Two-Phase Experiments\n");
+  fprintf(stdout,"      Unqualified experiments\n");
+  fprintf(stdout,"        Templates-1");
+  result = run_experiment<true,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(false/*single*/,false/*qualified*/,1);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-2");
+  result = run_experiment<true,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(false/*single*/,false/*qualified*/,2);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-3");
+  result = run_experiment<true,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(false/*single*/,false/*qualified*/,3);
+  if (!result) return result;
+  fprintf(stdout,"      Qualified Experiments\n");
+  fprintf(stdout,"        Templates-1");
+  result = run_experiment<true,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(false/*single*/,true/*qualified*/,1);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-2");
+  result = run_experiment<true,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(false/*single*/,true/*qualified*/,2);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-3");
+  result = run_experiment<true,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(false/*single*/,true/*qualified*/,3);
+  if (!result) return result;
+  fprintf(stdout,"  Non-Warp-Specialized Experiments\n");
+  fprintf(stdout,"    Single-Phase Experiments\n");
+  fprintf(stdout,"      Unqualified experiments\n");
+  fprintf(stdout,"        Templates-1");
+  result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(true/*single*/,false/*qualified*/,1);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-2");
+  result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(true/*single*/,false/*qualified*/,2);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-3");
+  result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(true/*single*/,false/*qualified*/,3);
+  if (!result) return result;
+  fprintf(stdout,"      Qualified Experiments\n");
+  fprintf(stdout,"        Templates-1");
+  result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(true/*single*/,true/*qualified*/,1);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-2");
+  result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(true/*single*/,true/*qualified*/,2);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-3");
+  result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(true/*single*/,true/*qualified*/,3);
+  if (!result) return result;
+  fprintf(stdout,"    Two-Phase Experiments\n");
+  fprintf(stdout,"      Unqualified experiments\n");
+  fprintf(stdout,"        Templates-1");
+  result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(false/*single*/,false/*qualified*/,1);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-2");
+  result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(false/*single*/,false/*qualified*/,2);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-3");
+  result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(false/*single*/,false/*qualified*/,3);
+  if (!result) return result;
+  fprintf(stdout,"      Qualified Experiments\n");
+  fprintf(stdout,"        Templates-1");
+  result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(false/*single*/,true/*qualified*/,1);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-2");
+  result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(false/*single*/,true/*qualified*/,2);
+  if (!result) return result;
+  fprintf(stdout,"        Templates-3");
+  result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS>(false/*single*/,true/*qualified*/,3);
+  if (!result) return result;
   fflush(stdout);
 
   return result;

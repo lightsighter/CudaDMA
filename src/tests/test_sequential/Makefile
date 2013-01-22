@@ -17,5 +17,11 @@ all: test_sequential
 test_sequential: ../../../include/cudaDMA.h cudaDMA_test_sequential.cu
 	nvcc -I../../../include -o test_sequential -O2 -arch=compute_20 -code=sm_20 cudaDMA_test_sequential.cu 
 
+ts2: ../../../include/cudaDMAv2.h cudaDMA_test_sequential_v2.cu
+	nvcc -I ../../../include -o test_sequential -O2 -arch=compute_20 -code=sm_20 cudaDMA_test_sequential_v2.cu
+
+ts2_k20: ../../../include/cudaDMAv2.h cudaDMA_test_sequential_v2.cu
+	nvcc -I ../../../include -o test_sequential -O2 -arch=compute_35 -code=sm_35 cudaDMA_test_sequential_v2.cu
+
 clean:
 	rm -f *.o test_sequential

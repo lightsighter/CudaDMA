@@ -636,14 +636,12 @@ __host__ bool run_experiment(bool single, bool qualified, int num_templates)
                     (d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), num_compute_warps*WARP_SIZE,
                      shared_buffer_size, single, qualified);
                 }
-#if 0
                 else
                 {
                   nonspec_xfer_four<ALIGNMENT,ALIGN_OFFSET,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS>
                     <<<1,total_threads,shared_buffer_size*sizeof(float),0>>>
-                    (d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, single_qualified);
+                    (d_idata, d_odata, src_stride*sizeof(float), dst_stride*sizeof(float), shared_buffer_size, single, qualified);
                 }
-#endif
 		break;
 	default:
 		assert(false);
@@ -675,7 +673,7 @@ __host__ bool run_experiment(bool single, bool qualified, int num_templates)
 	}
 	//if (!pass)
 	{
-		fprintf(stdout,"Result - %s\n",(pass?"PASS!":"FAIL!"));
+		fprintf(stdout," - %s\n",(pass?"PASS!":"FAIL!"));
 		fflush(stdout);
 	}
 
@@ -756,10 +754,10 @@ int main()
   fprintf(stdout,"        Templates-4");
   result = run_experiment<true,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS,PARAM_NUM_ELMTS>(false/*single*/,true/*qualified*/,4);
   if (!result) return result;
-#if 0
   fprintf(stdout,"  Non-Warp-Specialized Experiments\n");
   fprintf(stdout,"    Single-Phase Experiments\n");
   fprintf(stdout,"      Unqualified experiments\n");
+#if 0
   fprintf(stdout,"        Templates-1");
   result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS,PARAM_NUM_ELMTS>(true/*single*/,false/*qualified*/,1);
   if (!result) return result;
@@ -769,10 +767,12 @@ int main()
   fprintf(stdout,"        Templates-3");
   result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS,PARAM_NUM_ELMTS>(true/*single*/,false/*qualified*/,3);
   if (!result) return result;
+#endif
   fprintf(stdout,"        Templates-4");
   result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS,PARAM_NUM_ELMTS>(true/*single*/,false/*qualified*/,4);
   if (!result) return result;
   fprintf(stdout,"      Qualified Experiments\n");
+#if 0
   fprintf(stdout,"        Templates-1");
   result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS,PARAM_NUM_ELMTS>(true/*single*/,true/*qualified*/,1);
   if (!result) return result;
@@ -782,11 +782,13 @@ int main()
   fprintf(stdout,"        Templates-3");
   result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS,PARAM_NUM_ELMTS>(true/*single*/,true/*qualified*/,3);
   if (!result) return result;
+#endif
   fprintf(stdout,"        Templates-4");
   result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS,PARAM_NUM_ELMTS>(true/*single*/,true/*qualified*/,4);
   if (!result) return result;
   fprintf(stdout,"    Two-Phase Experiments\n");
   fprintf(stdout,"      Unqualified experiments\n");
+#if 0
   fprintf(stdout,"        Templates-1");
   result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS,PARAM_NUM_ELMTS>(false/*single*/,false/*qualified*/,1);
   if (!result) return result;
@@ -796,10 +798,12 @@ int main()
   fprintf(stdout,"        Templates-3");
   result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS,PARAM_NUM_ELMTS>(false/*single*/,false/*qualified*/,3);
   if (!result) return result;
+#endif
   fprintf(stdout,"        Templates-4");
   result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS,PARAM_NUM_ELMTS>(false/*single*/,false/*qualified*/,4);
   if (!result) return result;
   fprintf(stdout,"      Qualified Experiments\n");
+#if 0
   fprintf(stdout,"        Templates-1");
   result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS,PARAM_NUM_ELMTS>(false/*single*/,true/*qualified*/,1);
   if (!result) return result;
@@ -809,10 +813,10 @@ int main()
   fprintf(stdout,"        Templates-3");
   result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS,PARAM_NUM_ELMTS>(false/*single*/,true/*qualified*/,3);
   if (!result) return result;
+#endif
   fprintf(stdout,"        Templates-4");
   result = run_experiment<false,PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_DMA_THREADS,PARAM_NUM_ELMTS>(false/*single*/,true/*qualified*/,4);
   if (!result) return result;
-#endif
   fflush(stdout);
 
   return result;

@@ -3880,7 +3880,10 @@ public:
         {                                                                                           \
           for (int i = 0; i < row_iters; i++)                                                       \
           {                                                                                         \
-            ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(across_buffer[i], (float2*)dst_ptr);           \
+            float2 temp;                                                                            \
+            temp.x = across_buffer[i].x;                                                            \
+            temp.y = across_buffer[i].y;                                                            \
+            ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(temp, (float2*)dst_ptr);                       \
             dst_ptr += dst_elmt_stride;                                                             \
           }                                                                                         \
           break;                                                                                    \
@@ -4300,7 +4303,7 @@ public:
       }                                                                                                     \
       else                                                                                                  \
       {                                                                                                     \
-	load_all_partial_cases<,DMA_PARTIAL_BYTES,false,                                                    \
+	load_all_partial_cases<DMA_PARTIAL_BYTES,false,                                                     \
           DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);    \
       }                                                                                                     \
     }                                                                                                       \
@@ -4401,7 +4404,188 @@ public:
       load_across<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(src_ptr+this->dma_partial_offset,                          \
 			     src_elmt_stride, partial_bytes, row_iters);                                    \
     }                                                                                                       \
+  }                                                                                                         \
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL,                                     \
+           bool DMA_IS_SPLIT, bool DMA_IS_BIG,                                                              \
+           int DMA_STEP_ITERS_SPLIT, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_SPLIT,                      \
+           int DMA_STEP_ITERS_BIG,   int DMA_MAX_ITERS_BIG,   int DMA_PART_ITERS_BIG,                       \
+           int DMA_STEP_ITERS_FULL,  int DMA_ROW_ITERS_FULL,  int DMA_COL_ITERS_FULL,                       \
+	   bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS, bool DMA_ALL_WARPS_ACTIVE>                        \
+  __device__ __forceinline__ void execute_wait_xfer(void *RESTRICT dst_ptr)                                 \
+  {                                                                                                         \
+    char * dst_off_ptr = ((char*)dst_ptr) + this->dma_dst_offset;                                           \
+    if (DMA_IS_SPLIT)                                                                                       \
+    {                                                                                                       \
+      if (DMA_STEP_ITERS_SPLIT == 0)                                                                        \
+      {                                                                                                     \
+	store_all_partial_cases<DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,                                         \
+          DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_STORE_QUAL>(dst_off_ptr);                             \
+      }                                                                                                     \
+      else                                                                                                  \
+      {                                                                                                     \
+        store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                    \
+          DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_STORE_QUAL>(dst_off_ptr);                             \
+	this->dma_src_off_ptr += this->dma_src_step_stride;                                                 \
+	dst_off_ptr += this->dma_dst_step_stride;                                                           \
+	for (int i = 0; i < (DMA_STEP_ITERS_SPLIT-1); i++)                                                  \
+	{                                                                                                   \
+          load_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                   \
+            DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);  \
+          store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                  \
+            DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_STORE_QUAL>(dst_off_ptr);                           \
+	  this->dma_src_off_ptr += this->dma_src_step_stride;                                               \
+	  dst_off_ptr += this->dma_dst_step_stride;                                                         \
+        }                                                                                                   \
+	if (DMA_PARTIAL_ROWS)                                                                               \
+	{                                                                                                   \
+          load_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,                                    \
+            DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);  \
+          store_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,                                   \
+            DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_STORE_QUAL>(dst_off_ptr);                           \
+	}                                                                                                   \
+      }                                                                                                     \
+    }                                                                                                       \
+    else if (DMA_IS_BIG)                                                                                    \
+    {                                                                                                       \
+      for (int i = 0; i < DMA_STEP_ITERS_BIG; i++)                                                          \
+      {                                                                                                     \
+        perform_copy_elmt<DMA_MAX_ITERS_BIG,DMA_PART_ITERS_BIG,                                             \
+          DMA_PARTIAL_BYTES,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>                                   \
+            (this->dma_src_off_ptr, dst_off_ptr, this->dma_intra_elmt_stride, this->dma_partial_bytes);     \
+        this->dma_src_off_ptr += this->dma_src_elmt_stride;                                                 \
+        dst_off_ptr += this->dma_dst_elmt_stride;                                                           \
+      }                                                                                                     \
+    }                                                                                                       \
+    else                                                                                                    \
+    {                                                                                                       \
+      if (DMA_ALL_WARPS_ACTIVE)                                                                             \
+      {                                                                                                     \
+	if (DMA_STEP_ITERS_FULL == 0)                                                                       \
+	{                                                                                                   \
+	  store_all_partial_cases<DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,                                       \
+            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);                             \
+	}                                                                                                   \
+	else                                                                                                \
+	{                                                                                                   \
+	  store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                  \
+            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);                             \
+	  this->dma_src_off_ptr += this->dma_src_step_stride;                                               \
+	  dst_off_ptr += this->dma_dst_step_stride;                                                         \
+	  for (int i = 0; i < (DMA_STEP_ITERS_FULL-1); i++)                                                 \
+	  {                                                                                                 \
+            load_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                 \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);  \
+            store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);                           \
+	    this->dma_src_off_ptr += this->dma_src_step_stride;                                             \
+	    dst_off_ptr += this->dma_dst_step_stride;                                                       \
+	  }                                                                                                 \
+	  if (DMA_PARTIAL_ROWS)                                                                             \
+	  {                                                                                                 \
+            load_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,                                  \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);  \
+            store_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,                                 \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);                           \
+	  }                                                                                                 \
+	}                                                                                                   \
+      }                                                                                                     \
+      else if (this->dma_active_warp)                                                                       \
+      {                                                                                                     \
+        if (DMA_STEP_ITERS_FULL == 0)                                                                       \
+	{                                                                                                   \
+	  store_all_partial_cases<DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,                                       \
+            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);                             \
+	}                                                                                                   \
+	else                                                                                                \
+	{                                                                                                   \
+	  store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                  \
+            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);                             \
+	  this->dma_src_off_ptr += this->dma_src_step_stride;                                               \
+	  dst_off_ptr += this->dma_dst_step_stride;                                                         \
+	  for (int i = 0; i < (DMA_STEP_ITERS_FULL-1); i++)                                                 \
+	  {                                                                                                 \
+            load_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                 \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);  \
+            store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);                           \
+	    this->dma_src_off_ptr += this->dma_src_step_stride;                                             \
+	    dst_off_ptr += this->dma_dst_step_stride;                                                       \
+	  }                                                                                                 \
+	  if (DMA_PARTIAL_ROWS)                                                                             \
+	  {                                                                                                 \
+            load_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,                                  \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);  \
+            store_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,                                 \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);                           \
+	  }                                                                                                 \
+	}                                                                                                   \
+      }                                                                                                     \
+    }                                                                                                       \
+  }                                                                                                         \
+  template<bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS,                                                   \
+  	   int DMA_ROW_ITERS, int DMA_COL_ITERS, int DMA_STORE_QUAL>                                        \
+  __device__ __forceinline__ void store_all_partial_cases(char *RESTRICT dst_ptr)                           \
+  {                                                                                                         \
+    if (!DMA_PARTIAL_BYTES)                                                                                 \
+    {                                                                                                       \
+      if (!DMA_PARTIAL_ROWS)                                                                                \
+      {                                                                                                     \
+	store_strided<true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_STORE_QUAL>                        \
+			(dst_ptr, this->dma_dst_elmt_stride,                                                \
+			 this->dma_intra_elmt_stride, 0/*no partial bytes*/);                               \
+      }                                                                                                     \
+      else                                                                                                  \
+      {                                                                                                     \
+	store_strided_upper<true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_STORE_QUAL>                  \
+			(dst_ptr, this->dma_dst_elmt_stride,                                                \
+			 this->dma_intra_elmt_stride, 0/*no partial bytes*/, this->dma_partial_elmts);      \
+      }                                                                                                     \
+    }                                                                                                       \
+    else                                                                                                    \
+    {                                                                                                       \
+      if (!DMA_PARTIAL_ROWS)                                                                                \
+      {                                                                                                     \
+	store_strided<false/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_STORE_QUAL>                       \
+			(dst_ptr, this->dma_dst_elmt_stride,                                                \
+			 this->dma_intra_elmt_stride, this->dma_partial_bytes);                             \
+      }                                                                                                     \
+      else                                                                                                  \
+      {                                                                                                     \
+	store_strided_upper<false/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_STORE_QUAL>                 \
+			(dst_ptr, this->dma_dst_elmt_stride,                                                \
+			 this->dma_intra_elmt_stride, this->dma_partial_bytes, this->dma_partial_elmts);    \
+      }                                                                                                     \
+    }                                                                                                       \
+  }                                                                                                         \
+  template<bool DMA_ALL_ACTIVE, int DMA_ROW_ITERS, int DMA_COL_ITERS, int DMA_STORE_QUAL>                   \
+  __device__ __forceinline__ void store_strided(char *RESTRICT dst_ptr, const int dst_elmt_stride,          \
+  						const int intra_elmt_stride, const int partial_bytes)       \
+  {                                                                                                         \
+    CudaDMAMeta::NestedBufferStorer<BulkBuffer,1,DMA_COL_ITERS,DMA_COL_ITERS,                               \
+      1,DMA_ROW_ITERS,DMA_ROW_ITERS,DMA_STORE_QUAL>::store_all(                                             \
+          bulk_buffer,dst_ptr,dst_elmt_stride,intra_elmt_stride);                                           \
+    if (!DMA_ALL_ACTIVE)                                                                                    \
+    {                                                                                                       \
+      store_across<DMA_ROW_ITERS,DMA_STORE_QUAL>(dst_ptr+this->dma_partial_offset,                          \
+			      dst_elmt_stride,partial_bytes);                                               \
+    }                                                                                                       \
+  }                                                                                                         \
+  template<bool DMA_ALL_ACTIVE, int DMA_ROW_ITERS_UPPER, int DMA_COL_ITERS, int DMA_STORE_QUAL>             \
+  __device__ __forceinline__ void store_strided_upper(char *RESTRICT dst_ptr, const int dst_elmt_stride,    \
+  						      const int intra_elmt_stride, const int partial_bytes, \
+						      const int row_iters)                                  \
+  {                                                                                                         \
+    CudaDMAMeta::NestedConditionalStorer<BulkBuffer,1,DMA_COL_ITERS,DMA_COL_ITERS,                          \
+      1,DMA_ROW_ITERS_UPPER,DMA_ROW_ITERS_UPPER,DMA_STORE_QUAL>::store_all(                                 \
+          bulk_buffer,dst_ptr,dst_elmt_stride,intra_elmt_stride,row_iters);                                 \
+    if (!DMA_ALL_ACTIVE)                                                                                    \
+    {                                                                                                       \
+      store_across<DMA_STORE_QUAL>(dst_ptr+this->dma_partial_offset,                                        \
+			      dst_elmt_stride,partial_bytes,row_iters);                                     \
+    }                                                                                                       \
   }
+  
+
 
 #define STRIDED_START_XFER_IMPL(GLOBAL_LOAD,LOAD_QUAL,STORE_QUAL)                                           \
   execute_start_xfer<GLOBAL_LOAD,LOAD_QUAL,SPLIT_WARP,BIG_ELMTS,                                            \
@@ -4468,312 +4652,8 @@ public:
   WARP_SPECIALIZED_UNQUALIFIED_METHODS
   WARP_SPECIALIZED_QUALIFIED_METHODS
 private:
-  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, bool DMA_IS_SPLIT, bool DMA_IS_BIG,                     
-           int DMA_STEP_ITERS_SPLIT, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_SPLIT,                      
-           int DMA_STEP_ITERS_BIG,   int DMA_MAX_ITERS_BIG,   int DMA_PART_ITERS_BIG,                       
-           int DMA_STEP_ITERS_FULL,  int DMA_ROW_ITERS_FULL,  int DMA_COL_ITERS_FULL,                       
-	   bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS, bool DMA_ALL_WARPS_ACTIVE>                        
-  __device__ __forceinline__ void execute_start_xfer(const void *RESTRICT src_ptr)                          
-  {                                                                                                         
-    this->dma_src_off_ptr = ((const char*)src_ptr) + this->dma_src_offset;                                  
-    if (DMA_IS_SPLIT)                                                                                       
-    {                                                                                                       
-      if (DMA_STEP_ITERS_SPLIT == 0)                                                                        
-      {                                                                                                     
-	load_all_partial_cases<DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,                                          
-          DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);    
-      }                                                                                                     
-      else                                                                                                  
-      {                                                                                                     
-	load_all_partial_cases<DMA_PARTIAL_BYTES,false,                                                    
-          DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);    
-      }                                                                                                     
-    }                                                                                                       
-    else if (DMA_IS_BIG)                                                                                    
-    {                                                                                                       
-    }                                                                                                       
-    else                                                                                                    
-    {                                                                                                       
-      if (DMA_ALL_WARPS_ACTIVE)                                                                             
-      {                                                                                                     
-	if (DMA_STEP_ITERS_FULL == 0)                                                                       
-	{                                                                                                   
-	  load_all_partial_cases<DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,                                       
-            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);    
-	}                                                                                                   
-	else                                                                                                
-	{                                                                                                   
-	  load_all_partial_cases<DMA_PARTIAL_BYTES,false,                                                   
-            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);    
-	}                                                                                                   
-      }                                                                                                     
-      else if (this->dma_active_warp)                                                                       
-      {                                                                                                     
-	if (DMA_STEP_ITERS_FULL == 0)                                                                       
-	{                                                                                                   
-	  load_all_partial_cases<DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,                                        
-            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);    
-	}                                                                                                   
-	else                                                                                                
-	{                                                                                                   
-	  load_all_partial_cases<DMA_PARTIAL_BYTES,false,                                                   
-            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);    
-	}                                                                                                   
-      }                                                                                                     
-    }                                                                                                       
-  }                                                                                                         
-  template<bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS,                                                   
-           int DMA_ROW_ITERS, int DMA_COL_ITERS, bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                   
-  __device__ __forceinline__ void load_all_partial_cases(const char *RESTRICT src_ptr)                      
-  {                                                                                                         
-    if (!DMA_PARTIAL_BYTES)                                                                                 
-    {                                                                                                       
-      if (!DMA_PARTIAL_ROWS)                                                                                
-      {                                                                                                     
-	load_strided<true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>          
-			(src_ptr, this->dma_src_elmt_stride,                                                
-			 this->dma_intra_elmt_stride, 0/*no partial bytes*/);                               
-      }                                                                                                     
-      else                                                                                                  
-      {                                                                                                     
-	load_strided_upper<true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>    
-			(src_ptr, this->dma_src_elmt_stride,                                                
-			 this->dma_intra_elmt_stride, 0/*no partial bytes*/, this->dma_partial_elmts);      
-      }                                                                                                     
-    }                                                                                                       
-    else                                                                                                    
-    {                                                                                                       
-      if (!DMA_PARTIAL_ROWS)                                                                                
-      {                                                                                                     
-        load_strided<false/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>         
-			(src_ptr, this->dma_src_elmt_stride,                                                
-			 this->dma_intra_elmt_stride, this->dma_partial_bytes);                             
-      }                                                                                                     
-      else                                                                                                  
-      {                                                                                                     
-	load_strided_upper<false/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>   
-			(src_ptr, this->dma_src_elmt_stride,                                                
-			 this->dma_intra_elmt_stride, this->dma_partial_bytes, this->dma_partial_elmts);    
-      }                                                                                                     
-    }                                                                                                       
-  }                                                                                                         
-  template<bool DMA_ALL_ACTIVE, int DMA_ROW_ITERS, int DMA_COL_ITERS,                                       
-           bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                                                         
-  __device__ __forceinline__ void load_strided(const char *RESTRICT src_ptr,                                
-  				  	       const int src_elmt_stride,                                   
-					       const int intra_elmt_stride, const int partial_bytes)        
-  {                                                                                                         
-    CudaDMAMeta::NestedBufferLoader<BulkBuffer,1,DMA_COL_ITERS,DMA_COL_ITERS,                               
-      1,DMA_ROW_ITERS,DMA_ROW_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(                               
-                                        bulk_buffer,src_ptr,src_elmt_stride,intra_elmt_stride);             
-    if (!DMA_ALL_ACTIVE)                                                                                   
-    {                                                                                                       
-      load_across<DMA_ROW_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(src_ptr+this->dma_partial_offset,            
-                         src_elmt_stride, partial_bytes);                                                   
-    }                                                                                                       
-  }                                                                                                         
-  template<bool DMA_ALL_ACTIVE, int DMA_ROW_ITERS_UPPER, int DMA_COL_ITERS,                                 
-           bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                                                         
-  __device__ __forceinline__ void load_strided_upper(const char *RESTRICT src_ptr,                          
-  						const int src_elmt_stride, const int intra_elmt_stride,     
-						const int partial_bytes, const int row_iters)               
-  {                                                                                                         
-    CudaDMAMeta::NestedConditionalLoader<BulkBuffer,1,DMA_COL_ITERS,DMA_COL_ITERS,                          
-      1,DMA_ROW_ITERS_UPPER,DMA_ROW_ITERS_UPPER,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(                  
-                                  bulk_buffer,src_ptr,src_elmt_stride,intra_elmt_stride,row_iters);        
-    if (!DMA_ALL_ACTIVE)                                                                                    
-    {                                                                                                       
-      load_across<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(src_ptr+this->dma_partial_offset,                          
-			     src_elmt_stride, partial_bytes, row_iters);                                    
-    }                                                                                                       
-  }
-
-  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL,
-           bool DMA_IS_SPLIT, bool DMA_IS_BIG,
-           int DMA_STEP_ITERS_SPLIT, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_SPLIT,
-           int DMA_STEP_ITERS_BIG,   int DMA_MAX_ITERS_BIG,   int DMA_PART_ITERS_BIG,
-           int DMA_STEP_ITERS_FULL,  int DMA_ROW_ITERS_FULL,  int DMA_COL_ITERS_FULL,
-	   bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS, bool DMA_ALL_WARPS_ACTIVE>
-  __device__ __forceinline__ void execute_wait_xfer(void *RESTRICT dst_ptr) 
-  {
-    char * dst_off_ptr = ((char*)dst_ptr) + this->dma_dst_offset;
-    if (DMA_IS_SPLIT)
-    {
-      if (DMA_STEP_ITERS_SPLIT == 0)
-      {
-	store_all_partial_cases<DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
-          DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_STORE_QUAL>(dst_off_ptr);
-      }
-      else
-      {
-        store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,
-          DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_STORE_QUAL>(dst_off_ptr);
-	this->dma_src_off_ptr += this->dma_src_step_stride;
-	dst_off_ptr += this->dma_dst_step_stride;
-	// Only need to do N-1 iterations since we already did the first one
-	for (int i = 0; i < (DMA_STEP_ITERS_SPLIT-1); i++)
-	{
-          load_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,
-            DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);
-          store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,
-            DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_STORE_QUAL>(dst_off_ptr);
-	  this->dma_src_off_ptr += this->dma_src_step_stride;
-	  dst_off_ptr += this->dma_dst_step_stride;
-        }
-	if (DMA_PARTIAL_ROWS)
-	{
-          load_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,
-            DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);
-          store_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,
-            DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_STORE_QUAL>(dst_off_ptr);
-	}
-      }
-    }
-    else if (DMA_IS_BIG)
-    {
-      for (int i = 0; i < DMA_STEP_ITERS_BIG; i++)
-      {
-        perform_copy_elmt<DMA_MAX_ITERS_BIG,DMA_PART_ITERS_BIG,
-          DMA_PARTIAL_BYTES,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>
-            (this->dma_src_off_ptr, dst_off_ptr, this->dma_intra_elmt_stride, this->dma_partial_bytes);
-        this->dma_src_off_ptr += this->dma_src_elmt_stride;
-        dst_off_ptr += this->dma_dst_elmt_stride;
-      }
-    }
-    else
-    {
-      if (DMA_ALL_WARPS_ACTIVE)
-      {
-	if (DMA_STEP_ITERS_FULL == 0)
-	{
-	  store_all_partial_cases<DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
-            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);
-	}
-	else
-	{
-	  store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,
-            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);
-	  this->dma_src_off_ptr += this->dma_src_step_stride;
-	  dst_off_ptr += this->dma_dst_step_stride;
-	  // Only need to handle N-1 cases now
-	  for (int i = 0; i < (DMA_STEP_ITERS_FULL-1); i++)
-	  {
-            load_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,
-              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);
-            store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,
-              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);
-	    this->dma_src_off_ptr += this->dma_src_step_stride;
-	    dst_off_ptr += this->dma_dst_step_stride;
-	  }
-	  if (DMA_PARTIAL_ROWS)
-	  {
-            load_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,
-              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);
-            store_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,
-              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);
-	  }
-	}
-      }
-      else if (this->dma_active_warp)
-      {
-        if (DMA_STEP_ITERS_FULL == 0)
-	{
-	  store_all_partial_cases<DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,
-            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);
-	}
-	else
-	{
-	  store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,
-            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);
-	  this->dma_src_off_ptr += this->dma_src_step_stride;
-	  dst_off_ptr += this->dma_dst_step_stride;
-	  // Only need to handle N-1 cases now
-	  for (int i = 0; i < (DMA_STEP_ITERS_FULL-1); i++)
-	  {
-            load_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,
-              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);
-            store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,
-              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);
-	    this->dma_src_off_ptr += this->dma_src_step_stride;
-	    dst_off_ptr += this->dma_dst_step_stride;
-	  }
-	  if (DMA_PARTIAL_ROWS)
-	  {
-            load_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,
-              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(this->dma_src_off_ptr);
-            store_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,
-              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>(dst_off_ptr);
-	  }
-	}
-      }
-    }
-  }
-
-  template<bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS,
-  	   int DMA_ROW_ITERS, int DMA_COL_ITERS, int DMA_STORE_QUAL>
-  __device__ __forceinline__ void store_all_partial_cases(char *RESTRICT dst_ptr)
-  {
-    if (!DMA_PARTIAL_BYTES)
-    {
-      if (!DMA_PARTIAL_ROWS)
-      {
-	store_strided<true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_STORE_QUAL>
-			(dst_ptr, this->dma_dst_elmt_stride,
-			 this->dma_intra_elmt_stride, 0/*no partial bytes*/);
-      }
-      else
-      {
-	store_strided_upper<true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_STORE_QUAL>
-			(dst_ptr, this->dma_dst_elmt_stride,
-			 this->dma_intra_elmt_stride, 0/*no partial bytes*/, this->dma_partial_elmts);
-      }
-    }
-    else
-    {
-      if (!DMA_PARTIAL_ROWS)
-      {
-	store_strided<false/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_STORE_QUAL>
-			(dst_ptr, this->dma_dst_elmt_stride,
-			 this->dma_intra_elmt_stride, this->dma_partial_bytes);
-      }
-      else
-      {
-	store_strided_upper<false/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_STORE_QUAL>
-			(dst_ptr, this->dma_dst_elmt_stride,
-			 this->dma_intra_elmt_stride, this->dma_partial_bytes, this->dma_partial_elmts);
-      }
-    }
-  }
-
-  template<bool DMA_ALL_ACTIVE, int DMA_ROW_ITERS, int DMA_COL_ITERS, int DMA_STORE_QUAL>
-  __device__ __forceinline__ void store_strided(char *RESTRICT dst_ptr, const int dst_elmt_stride,
-  						const int intra_elmt_stride, const int partial_bytes)
-  {
-    CudaDMAMeta::NestedBufferStorer<BulkBuffer,1,DMA_COL_ITERS,DMA_COL_ITERS,
-      1,DMA_ROW_ITERS,DMA_ROW_ITERS,DMA_STORE_QUAL>::store_all(
-          bulk_buffer,dst_ptr,dst_elmt_stride,intra_elmt_stride);
-    if (!DMA_ALL_ACTIVE)
-    { 
-      store_across<DMA_ROW_ITERS,DMA_STORE_QUAL>(dst_ptr+this->dma_partial_offset,
-			      dst_elmt_stride,partial_bytes);
-    }
-  }
-
-  template<bool DMA_ALL_ACTIVE, int DMA_ROW_ITERS_UPPER, int DMA_COL_ITERS, int DMA_STORE_QUAL>
-  __device__ __forceinline__ void store_strided_upper(char *RESTRICT dst_ptr, const int dst_elmt_stride,
-  						      const int intra_elmt_stride, const int partial_bytes,
-						      const int row_iters)
-  {
-    CudaDMAMeta::NestedConditionalStorer<BulkBuffer,1,DMA_COL_ITERS,DMA_COL_ITERS,
-      1,DMA_ROW_ITERS_UPPER,DMA_ROW_ITERS_UPPER,DMA_STORE_QUAL>::store_all(
-          bulk_buffer,dst_ptr,dst_elmt_stride,intra_elmt_stride,row_iters);
-    if (!DMA_ALL_ACTIVE)
-    { 
-      store_across<DMA_STORE_QUAL>(dst_ptr+this->dma_partial_offset,
-			      dst_elmt_stride,partial_bytes,row_iters);
-    } 
-  }
-
+  TEMPLATE_FOUR_IMPL
+private:
   template<int DMA_MAX_ITERS, int DMA_PARTIAL_ITERS, bool DMA_PARTIAL_BYTES,
            bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
   __device__ __forceinline__ void perform_copy_elmt(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, 
@@ -4840,88 +4720,642 @@ private:
 #undef LOCAL_TYPENAME
 #undef ALIGNMENT
 
-#if 0
 #define LOCAL_TYPENAME float2
-#define ALIGNEMNT 8
+#define ALIGNMENT 8
 template<int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
 class CudaDMAStrided<true,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : public CudaDMA {
 public:
   __device__ CudaDMAStrided(const int dmaID,
                             const int num_compute_threads,
                             const int dma_threadIdx_start,
-                            const int elmt_stride);
+                            const int elmt_stride)
+    : CudaDMA(dmaID,DMA_THREADS,num_compute_threads,dma_threadIdx_start),
+      dma_src_offset(INIT_SRC_OFFSET(elmt_stride)),
+      dma_dst_offset(INIT_DST_OFFSET(elmt_stride)),
+      dma_src_step_stride(INIT_SRC_STEP_STRIDE(elmt_stride)),
+      dma_dst_step_stride(INIT_DST_STEP_STRIDE(elmt_stride)),
+      dma_src_elmt_stride(INIT_SRC_ELMT_STRIDE(elmt_stride)),
+      dma_dst_elmt_stride(INIT_DST_ELMT_STRIDE(elmt_stride)),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
   
   __device__ CudaDMAStrided(const int dmaID,
                             const int num_compute_threads,
                             const int dma_threadIdx_start,
                             const int src_stride,
-                            const int dst_stride);
+                            const int dst_stride)
+    : CudaDMA(dmaID,DMA_THREADS,num_compute_threads,dma_threadIdx_start),
+      dma_src_offset(INIT_SRC_OFFSET(src_stride)),
+      dma_dst_offset(INIT_DST_OFFSET(dst_stride)),
+      dma_src_step_stride(INIT_SRC_STEP_STRIDE(src_stride)),
+      dma_dst_step_stride(INIT_DST_STEP_STRIDE(dst_stride)),
+      dma_src_elmt_stride(INIT_SRC_ELMT_STRIDE(src_stride)),
+      dma_dst_elmt_stride(INIT_DST_ELMT_STRIDE(dst_stride)),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  WARP_SPECIALIZED_UNQUALIFIED_METHODS
+  WARP_SPECIALIZED_QUALIFIED_METHODS
+private:
+  TEMPLATE_FOUR_IMPL
+private:
+  template<int DMA_MAX_ITERS, int DMA_PARTIAL_ITERS, bool DMA_PARTIAL_BYTES,
+           bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void perform_copy_elmt(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, 
+                                                    const int intra_elmt_stride, const int partial_bytes)
+  {
+    for (int idx = 0; idx < DMA_MAX_ITERS; idx++)
+    {
+      CudaDMAMeta::BufferLoader<BulkBuffer,0,1,BYTES_PER_THREAD/ALIGNMENT,
+        BYTES_PER_THREAD/ALIGNMENT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(bulk_buffer, src_ptr, intra_elmt_stride);
+      src_ptr += ((BYTES_PER_THREAD/ALIGNMENT)*intra_elmt_stride);
+      CudaDMAMeta::BufferStorer<BulkBuffer,0,1,BYTES_PER_THREAD/ALIGNMENT,
+        BYTES_PER_THREAD/ALIGNMENT,DMA_STORE_QUAL>::store_all(bulk_buffer, dst_ptr, intra_elmt_stride);
+      dst_ptr += ((BYTES_PER_THREAD/ALIGNMENT)*intra_elmt_stride);
+    }
+    if (DMA_PARTIAL_ITERS > 0)
+    {
+      CudaDMAMeta::BufferLoader<BulkBuffer,0,1,DMA_PARTIAL_ITERS,
+        DMA_PARTIAL_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(bulk_buffer, src_ptr, intra_elmt_stride);
+      src_ptr += (DMA_PARTIAL_ITERS * intra_elmt_stride);
+      CudaDMAMeta::BufferStorer<BulkBuffer,0,1,DMA_PARTIAL_ITERS,
+        DMA_PARTIAL_ITERS,DMA_STORE_QUAL>::store_all(bulk_buffer, dst_ptr, intra_elmt_stride);
+      dst_ptr += (DMA_PARTIAL_ITERS * intra_elmt_stride);
+    }
+    if (DMA_PARTIAL_BYTES)
+    {
+      switch (partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          {
+            float tmp = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);
+            ptx_cudaDMA_store<float,DMA_STORE_QUAL>(tmp, (float*)dst_ptr);
+            break;
+          }
+        case 8:
+          {
+            float2 tmp = ptx_cudaDMA_load<float2,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)src_ptr);
+            ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(tmp, (float2*)dst_ptr);
+            break;
+          }
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  LOAD_8_PARTIAL_BYTES_IMPL
+  STORE_8_PARTIAL_BYTES_IMPL
+private:
+  const char *dma_src_off_ptr;
+  const unsigned int dma_src_offset;
+  const unsigned int dma_dst_offset;
+  const unsigned int dma_src_step_stride;
+  const unsigned int dma_dst_step_stride;
+  const unsigned int dma_src_elmt_stride;
+  const unsigned int dma_dst_elmt_stride;
+  const unsigned int dma_intra_elmt_stride;
+  const unsigned int dma_partial_bytes;
+  const unsigned int dma_partial_offset;
+  const unsigned int dma_partial_elmts;
+  const bool         dma_active_warp;
+  typedef CudaDMAMeta::DMABuffer<LOCAL_TYPENAME,BYTES_PER_THREAD/ALIGNMENT> BulkBuffer;
+  BulkBuffer bulk_buffer;
+  LOCAL_TYPENAME across_buffer[GUARD_ZERO(SPLIT_WARP ? ROW_ITERS_SPLIT : 
+  				BIG_ELMTS ? 1 : ROW_ITERS_FULL)*ALIGNMENT/sizeof(LOCAL_TYPENAME)];
 };
 #undef LOCAL_TYPENAME
 #undef ALIGNMENT
 
 #define LOCAL_TYPENAME float4
-#define ALIGNEMNT 16 
+#define ALIGNMENT 16 
 template<int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
 class CudaDMAStrided<true,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : public CudaDMA {
 public:
   __device__ CudaDMAStrided(const int dmaID,
                             const int num_compute_threads,
                             const int dma_threadIdx_start,
-                            const int elmt_stride);
+                            const int elmt_stride)
+    : CudaDMA(dmaID,DMA_THREADS,num_compute_threads,dma_threadIdx_start),
+      dma_src_offset(INIT_SRC_OFFSET(elmt_stride)),
+      dma_dst_offset(INIT_DST_OFFSET(elmt_stride)),
+      dma_src_step_stride(INIT_SRC_STEP_STRIDE(elmt_stride)),
+      dma_dst_step_stride(INIT_DST_STEP_STRIDE(elmt_stride)),
+      dma_src_elmt_stride(INIT_SRC_ELMT_STRIDE(elmt_stride)),
+      dma_dst_elmt_stride(INIT_DST_ELMT_STRIDE(elmt_stride)),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
   
   __device__ CudaDMAStrided(const int dmaID,
                             const int num_compute_threads,
                             const int dma_threadIdx_start,
                             const int src_stride,
-                            const int dst_stride);
+                            const int dst_stride)
+    : CudaDMA(dmaID,DMA_THREADS,num_compute_threads,dma_threadIdx_start),
+      dma_src_offset(INIT_SRC_OFFSET(src_stride)),
+      dma_dst_offset(INIT_DST_OFFSET(dst_stride)),
+      dma_src_step_stride(INIT_SRC_STEP_STRIDE(src_stride)),
+      dma_dst_step_stride(INIT_DST_STEP_STRIDE(dst_stride)),
+      dma_src_elmt_stride(INIT_SRC_ELMT_STRIDE(src_stride)),
+      dma_dst_elmt_stride(INIT_DST_ELMT_STRIDE(dst_stride)),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  WARP_SPECIALIZED_UNQUALIFIED_METHODS
+  WARP_SPECIALIZED_QUALIFIED_METHODS
+private:
+  TEMPLATE_FOUR_IMPL
+private:
+  template<int DMA_MAX_ITERS, int DMA_PARTIAL_ITERS, bool DMA_PARTIAL_BYTES,
+           bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void perform_copy_elmt(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, 
+                                                    const int intra_elmt_stride, const int partial_bytes)
+  {
+    for (int idx = 0; idx < DMA_MAX_ITERS; idx++)
+    {
+      CudaDMAMeta::BufferLoader<BulkBuffer,0,1,BYTES_PER_THREAD/ALIGNMENT,
+        BYTES_PER_THREAD/ALIGNMENT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(bulk_buffer, src_ptr, intra_elmt_stride);
+      src_ptr += ((BYTES_PER_THREAD/ALIGNMENT)*intra_elmt_stride);
+      CudaDMAMeta::BufferStorer<BulkBuffer,0,1,BYTES_PER_THREAD/ALIGNMENT,
+        BYTES_PER_THREAD/ALIGNMENT,DMA_STORE_QUAL>::store_all(bulk_buffer, dst_ptr, intra_elmt_stride);
+      dst_ptr += ((BYTES_PER_THREAD/ALIGNMENT)*intra_elmt_stride);
+    }
+    if (DMA_PARTIAL_ITERS > 0)
+    {
+      CudaDMAMeta::BufferLoader<BulkBuffer,0,1,DMA_PARTIAL_ITERS,
+        DMA_PARTIAL_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(bulk_buffer, src_ptr, intra_elmt_stride);
+      src_ptr += (DMA_PARTIAL_ITERS * intra_elmt_stride);
+      CudaDMAMeta::BufferStorer<BulkBuffer,0,1,DMA_PARTIAL_ITERS,
+        DMA_PARTIAL_ITERS,DMA_STORE_QUAL>::store_all(bulk_buffer, dst_ptr, intra_elmt_stride);
+      dst_ptr += (DMA_PARTIAL_ITERS * intra_elmt_stride);
+    }
+    if (DMA_PARTIAL_BYTES)
+    {
+      switch (partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          {
+            float tmp = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);
+            ptx_cudaDMA_store<float,DMA_STORE_QUAL>(tmp, (float*)dst_ptr);
+            break;
+          }
+        case 8:
+          {
+            float2 tmp = ptx_cudaDMA_load<float2,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)src_ptr);
+            ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(tmp, (float2*)dst_ptr);
+            break;
+          }
+        case 12:
+          {
+            float3 tmp = ptx_cudaDMA_load<float3,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float3*)src_ptr);
+            ptx_cudaDMA_store<float3,DMA_STORE_QUAL>(tmp, (float3*)dst_ptr);
+            break;
+          }
+        case 16:
+          {
+            float4 tmp = ptx_cudaDMA_load<float4,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float4*)src_ptr);
+            ptx_cudaDMA_store<float4,DMA_STORE_QUAL>(tmp, (float4*)dst_ptr);
+            break;
+          }
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  LOAD_16_PARTIAL_BYTES_IMPL
+  STORE_16_PARTIAL_BYTES_IMPL
+private:
+  const char *dma_src_off_ptr;
+  const unsigned int dma_src_offset;
+  const unsigned int dma_dst_offset;
+  const unsigned int dma_src_step_stride;
+  const unsigned int dma_dst_step_stride;
+  const unsigned int dma_src_elmt_stride;
+  const unsigned int dma_dst_elmt_stride;
+  const unsigned int dma_intra_elmt_stride;
+  const unsigned int dma_partial_bytes;
+  const unsigned int dma_partial_offset;
+  const unsigned int dma_partial_elmts;
+  const bool         dma_active_warp;
+  typedef CudaDMAMeta::DMABuffer<LOCAL_TYPENAME,BYTES_PER_THREAD/ALIGNMENT> BulkBuffer;
+  BulkBuffer bulk_buffer;
+  LOCAL_TYPENAME across_buffer[GUARD_ZERO(SPLIT_WARP ? ROW_ITERS_SPLIT : 
+  				BIG_ELMTS ? 1 : ROW_ITERS_FULL)*ALIGNMENT/sizeof(LOCAL_TYPENAME)];
 };
 #undef LOCAL_TYPENAME
 #undef ALIGNMENT
 
 // four template parameters, non-warp-specialized
 #define LOCAL_TYPENAME float
-#define ALIGNEMNT 4
+#define ALIGNMENT 4
 template<int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
-class CudaDMAStrided<false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,0> : public CudaDMA {
+class CudaDMAStrided<false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : public CudaDMA {
 public:
-  __device__ CudaDMAStrided(const int elmt_stride);
+#define dma_threadIdx_start 0
+  __device__ CudaDMAStrided(const int elmt_stride)
+    : CudaDMA(0, DMA_THREADS, DMA_THREADS, dma_threadIdx_start),
+      dma_src_offset(INIT_SRC_OFFSET(elmt_stride)),
+      dma_dst_offset(INIT_DST_OFFSET(elmt_stride)),
+      dma_src_step_stride(INIT_SRC_STEP_STRIDE(elmt_stride)),
+      dma_dst_step_stride(INIT_DST_STEP_STRIDE(elmt_stride)),
+      dma_src_elmt_stride(INIT_SRC_ELMT_STRIDE(elmt_stride)),
+      dma_dst_elmt_stride(INIT_DST_ELMT_STRIDE(elmt_stride)),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+#undef dma_threadIdx_start
 
   __device__ CudaDMAStrided(const int src_stride,
                             const int dst_stride,
-                            const int dma_thread_idx_start = 0);
+                            const int dma_threadIdx_start = 0)
+    : CudaDMA(0, DMA_THREADS, DMA_THREADS, dma_threadIdx_start),
+      dma_src_offset(INIT_SRC_OFFSET(src_stride)),
+      dma_dst_offset(INIT_DST_OFFSET(dst_stride)),
+      dma_src_step_stride(INIT_SRC_STEP_STRIDE(src_stride)),
+      dma_dst_step_stride(INIT_DST_STEP_STRIDE(dst_stride)),
+      dma_src_elmt_stride(INIT_SRC_ELMT_STRIDE(src_stride)),
+      dma_dst_elmt_stride(INIT_DST_ELMT_STRIDE(dst_stride)),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  NON_WARP_SPECIALIZED_UNQUALIFIED_METHODS
+  NON_WARP_SPECIALIZED_QUALIFIED_METHODS
+private:
+  TEMPLATE_FOUR_IMPL
+private:
+  template<int DMA_MAX_ITERS, int DMA_PARTIAL_ITERS, bool DMA_PARTIAL_BYTES,
+           bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void perform_copy_elmt(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, 
+                                                    const int intra_elmt_stride, const int partial_bytes)
+  {
+    for (int idx = 0; idx < DMA_MAX_ITERS; idx++)
+    {
+      CudaDMAMeta::BufferLoader<BulkBuffer,0,1,BYTES_PER_THREAD/ALIGNMENT,
+        BYTES_PER_THREAD/ALIGNMENT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(bulk_buffer, src_ptr, intra_elmt_stride);
+      src_ptr += ((BYTES_PER_THREAD/ALIGNMENT)*intra_elmt_stride);
+      CudaDMAMeta::BufferStorer<BulkBuffer,0,1,BYTES_PER_THREAD/ALIGNMENT,
+        BYTES_PER_THREAD/ALIGNMENT,DMA_STORE_QUAL>::store_all(bulk_buffer, dst_ptr, intra_elmt_stride);
+      dst_ptr += ((BYTES_PER_THREAD/ALIGNMENT)*intra_elmt_stride);
+    }
+    if (DMA_PARTIAL_ITERS > 0)
+    {
+      CudaDMAMeta::BufferLoader<BulkBuffer,0,1,DMA_PARTIAL_ITERS,
+        DMA_PARTIAL_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(bulk_buffer, src_ptr, intra_elmt_stride);
+      src_ptr += (DMA_PARTIAL_ITERS * intra_elmt_stride);
+      CudaDMAMeta::BufferStorer<BulkBuffer,0,1,DMA_PARTIAL_ITERS,
+        DMA_PARTIAL_ITERS,DMA_STORE_QUAL>::store_all(bulk_buffer, dst_ptr, intra_elmt_stride);
+      dst_ptr += (DMA_PARTIAL_ITERS * intra_elmt_stride);
+    }
+    if (DMA_PARTIAL_BYTES)
+    {
+      switch (partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          {
+            float tmp = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);
+            ptx_cudaDMA_store<float,DMA_STORE_QUAL>(tmp, (float*)dst_ptr);
+            break;
+          }
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  LOAD_4_PARTIAL_BYTES_IMPL
+  STORE_4_PARTIAL_BYTES_IMPL
+private:
+  const char *dma_src_off_ptr;
+  const unsigned int dma_src_offset;
+  const unsigned int dma_dst_offset;
+  const unsigned int dma_src_step_stride;
+  const unsigned int dma_dst_step_stride;
+  const unsigned int dma_src_elmt_stride;
+  const unsigned int dma_dst_elmt_stride;
+  const unsigned int dma_intra_elmt_stride;
+  const unsigned int dma_partial_bytes;
+  const unsigned int dma_partial_offset;
+  const unsigned int dma_partial_elmts;
+  const bool         dma_active_warp;
+  typedef CudaDMAMeta::DMABuffer<LOCAL_TYPENAME,BYTES_PER_THREAD/ALIGNMENT> BulkBuffer;
+  BulkBuffer bulk_buffer;
+  LOCAL_TYPENAME across_buffer[GUARD_ZERO(SPLIT_WARP ? ROW_ITERS_SPLIT : 
+  				BIG_ELMTS ? 1 : ROW_ITERS_FULL)*ALIGNMENT/sizeof(LOCAL_TYPENAME)];
 };
 #undef LOCAL_TYPENAME
 #undef ALIGNMENT
 
 #define LOCAL_TYPENAME float2
-#define ALIGNEMNT 8
+#define ALIGNMENT 8
 template<int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
-class CudaDMAStrided<false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,0> : public CudaDMA {
+class CudaDMAStrided<false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : public CudaDMA {
 public:
-  __device__ CudaDMAStrided(const int elmt_stride);
+#define dma_threadIdx_start 0
+  __device__ CudaDMAStrided(const int elmt_stride)
+    : CudaDMA(0, DMA_THREADS, DMA_THREADS, dma_threadIdx_start),
+      dma_src_offset(INIT_SRC_OFFSET(elmt_stride)),
+      dma_dst_offset(INIT_DST_OFFSET(elmt_stride)),
+      dma_src_step_stride(INIT_SRC_STEP_STRIDE(elmt_stride)),
+      dma_dst_step_stride(INIT_DST_STEP_STRIDE(elmt_stride)),
+      dma_src_elmt_stride(INIT_SRC_ELMT_STRIDE(elmt_stride)),
+      dma_dst_elmt_stride(INIT_DST_ELMT_STRIDE(elmt_stride)),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+#undef dma_threadIdx_start
 
   __device__ CudaDMAStrided(const int src_stride,
                             const int dst_stride,
-                            const int dma_thread_idx_start = 0);
+                            const int dma_threadIdx_start = 0)
+    : CudaDMA(0, DMA_THREADS, DMA_THREADS, dma_threadIdx_start),
+      dma_src_offset(INIT_SRC_OFFSET(src_stride)),
+      dma_dst_offset(INIT_DST_OFFSET(dst_stride)),
+      dma_src_step_stride(INIT_SRC_STEP_STRIDE(src_stride)),
+      dma_dst_step_stride(INIT_DST_STEP_STRIDE(dst_stride)),
+      dma_src_elmt_stride(INIT_SRC_ELMT_STRIDE(src_stride)),
+      dma_dst_elmt_stride(INIT_DST_ELMT_STRIDE(dst_stride)),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  NON_WARP_SPECIALIZED_UNQUALIFIED_METHODS
+  NON_WARP_SPECIALIZED_QUALIFIED_METHODS
+private:
+  TEMPLATE_FOUR_IMPL
+private:
+  template<int DMA_MAX_ITERS, int DMA_PARTIAL_ITERS, bool DMA_PARTIAL_BYTES,
+           bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void perform_copy_elmt(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, 
+                                                    const int intra_elmt_stride, const int partial_bytes)
+  {
+    for (int idx = 0; idx < DMA_MAX_ITERS; idx++)
+    {
+      CudaDMAMeta::BufferLoader<BulkBuffer,0,1,BYTES_PER_THREAD/ALIGNMENT,
+        BYTES_PER_THREAD/ALIGNMENT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(bulk_buffer, src_ptr, intra_elmt_stride);
+      src_ptr += ((BYTES_PER_THREAD/ALIGNMENT)*intra_elmt_stride);
+      CudaDMAMeta::BufferStorer<BulkBuffer,0,1,BYTES_PER_THREAD/ALIGNMENT,
+        BYTES_PER_THREAD/ALIGNMENT,DMA_STORE_QUAL>::store_all(bulk_buffer, dst_ptr, intra_elmt_stride);
+      dst_ptr += ((BYTES_PER_THREAD/ALIGNMENT)*intra_elmt_stride);
+    }
+    if (DMA_PARTIAL_ITERS > 0)
+    {
+      CudaDMAMeta::BufferLoader<BulkBuffer,0,1,DMA_PARTIAL_ITERS,
+        DMA_PARTIAL_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(bulk_buffer, src_ptr, intra_elmt_stride);
+      src_ptr += (DMA_PARTIAL_ITERS * intra_elmt_stride);
+      CudaDMAMeta::BufferStorer<BulkBuffer,0,1,DMA_PARTIAL_ITERS,
+        DMA_PARTIAL_ITERS,DMA_STORE_QUAL>::store_all(bulk_buffer, dst_ptr, intra_elmt_stride);
+      dst_ptr += (DMA_PARTIAL_ITERS * intra_elmt_stride);
+    }
+    if (DMA_PARTIAL_BYTES)
+    {
+      switch (partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          {
+            float tmp = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);
+            ptx_cudaDMA_store<float,DMA_STORE_QUAL>(tmp, (float*)dst_ptr);
+            break;
+          }
+        case 8:
+          {
+            float2 tmp = ptx_cudaDMA_load<float2,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)src_ptr);
+            ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(tmp, (float2*)dst_ptr);
+            break;
+          }
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  LOAD_8_PARTIAL_BYTES_IMPL
+  STORE_8_PARTIAL_BYTES_IMPL
+private:
+  const char *dma_src_off_ptr;
+  const unsigned int dma_src_offset;
+  const unsigned int dma_dst_offset;
+  const unsigned int dma_src_step_stride;
+  const unsigned int dma_dst_step_stride;
+  const unsigned int dma_src_elmt_stride;
+  const unsigned int dma_dst_elmt_stride;
+  const unsigned int dma_intra_elmt_stride;
+  const unsigned int dma_partial_bytes;
+  const unsigned int dma_partial_offset;
+  const unsigned int dma_partial_elmts;
+  const bool         dma_active_warp;
+  typedef CudaDMAMeta::DMABuffer<LOCAL_TYPENAME,BYTES_PER_THREAD/ALIGNMENT> BulkBuffer;
+  BulkBuffer bulk_buffer;
+  LOCAL_TYPENAME across_buffer[GUARD_ZERO(SPLIT_WARP ? ROW_ITERS_SPLIT : 
+  				BIG_ELMTS ? 1 : ROW_ITERS_FULL)*ALIGNMENT/sizeof(LOCAL_TYPENAME)];
 };
 #undef LOCAL_TYPENAME
 #undef ALIGNMENT
 
 #define LOCAL_TYPENAME float4
-#define ALIGNEMNT 16 
+#define ALIGNMENT 16 
 template<int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
-class CudaDMAStrided<false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,0> : public CudaDMA {
+class CudaDMAStrided<false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : public CudaDMA {
 public:
-  __device__ CudaDMAStrided(const int elmt_stride);
+#define dma_threadIdx_start 0
+  __device__ CudaDMAStrided(const int elmt_stride)
+    : CudaDMA(0, DMA_THREADS, DMA_THREADS, dma_threadIdx_start),
+      dma_src_offset(INIT_SRC_OFFSET(elmt_stride)),
+      dma_dst_offset(INIT_DST_OFFSET(elmt_stride)),
+      dma_src_step_stride(INIT_SRC_STEP_STRIDE(elmt_stride)),
+      dma_dst_step_stride(INIT_DST_STEP_STRIDE(elmt_stride)),
+      dma_src_elmt_stride(INIT_SRC_ELMT_STRIDE(elmt_stride)),
+      dma_dst_elmt_stride(INIT_DST_ELMT_STRIDE(elmt_stride)),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+#undef dma_threadIdx_start
 
   __device__ CudaDMAStrided(const int src_stride,
                             const int dst_stride,
-                            const int dma_thread_idx_start = 0);
+                            const int dma_threadIdx_start = 0)
+    : CudaDMA(0, DMA_THREADS, DMA_THREADS, dma_threadIdx_start),
+      dma_src_offset(INIT_SRC_OFFSET(src_stride)),
+      dma_dst_offset(INIT_DST_OFFSET(dst_stride)),
+      dma_src_step_stride(INIT_SRC_STEP_STRIDE(src_stride)),
+      dma_dst_step_stride(INIT_DST_STEP_STRIDE(dst_stride)),
+      dma_src_elmt_stride(INIT_SRC_ELMT_STRIDE(src_stride)),
+      dma_dst_elmt_stride(INIT_DST_ELMT_STRIDE(dst_stride)),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  NON_WARP_SPECIALIZED_UNQUALIFIED_METHODS
+  NON_WARP_SPECIALIZED_QUALIFIED_METHODS
+private:
+  TEMPLATE_FOUR_IMPL
+private:
+  template<int DMA_MAX_ITERS, int DMA_PARTIAL_ITERS, bool DMA_PARTIAL_BYTES,
+           bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void perform_copy_elmt(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, 
+                                                    const int intra_elmt_stride, const int partial_bytes)
+  {
+    for (int idx = 0; idx < DMA_MAX_ITERS; idx++)
+    {
+      CudaDMAMeta::BufferLoader<BulkBuffer,0,1,BYTES_PER_THREAD/ALIGNMENT,
+        BYTES_PER_THREAD/ALIGNMENT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(bulk_buffer, src_ptr, intra_elmt_stride);
+      src_ptr += ((BYTES_PER_THREAD/ALIGNMENT)*intra_elmt_stride);
+      CudaDMAMeta::BufferStorer<BulkBuffer,0,1,BYTES_PER_THREAD/ALIGNMENT,
+        BYTES_PER_THREAD/ALIGNMENT,DMA_STORE_QUAL>::store_all(bulk_buffer, dst_ptr, intra_elmt_stride);
+      dst_ptr += ((BYTES_PER_THREAD/ALIGNMENT)*intra_elmt_stride);
+    }
+    if (DMA_PARTIAL_ITERS > 0)
+    {
+      CudaDMAMeta::BufferLoader<BulkBuffer,0,1,DMA_PARTIAL_ITERS,
+        DMA_PARTIAL_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>::load_all(bulk_buffer, src_ptr, intra_elmt_stride);
+      src_ptr += (DMA_PARTIAL_ITERS * intra_elmt_stride);
+      CudaDMAMeta::BufferStorer<BulkBuffer,0,1,DMA_PARTIAL_ITERS,
+        DMA_PARTIAL_ITERS,DMA_STORE_QUAL>::store_all(bulk_buffer, dst_ptr, intra_elmt_stride);
+      dst_ptr += (DMA_PARTIAL_ITERS * intra_elmt_stride);
+    }
+    if (DMA_PARTIAL_BYTES)
+    {
+      switch (partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          {
+            float tmp = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);
+            ptx_cudaDMA_store<float,DMA_STORE_QUAL>(tmp, (float*)dst_ptr);
+            break;
+          }
+        case 8:
+          {
+            float2 tmp = ptx_cudaDMA_load<float2,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)src_ptr);
+            ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(tmp, (float2*)dst_ptr);
+            break;
+          }
+        case 12:
+          {
+            float3 tmp = ptx_cudaDMA_load<float3,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float3*)src_ptr);
+            ptx_cudaDMA_store<float3,DMA_STORE_QUAL>(tmp, (float3*)dst_ptr);
+            break;
+          }
+        case 16:
+          {
+            float4 tmp = ptx_cudaDMA_load<float4,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float4*)src_ptr);
+            ptx_cudaDMA_store<float4,DMA_STORE_QUAL>(tmp, (float4*)dst_ptr);
+            break;
+          }
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  LOAD_16_PARTIAL_BYTES_IMPL
+  STORE_16_PARTIAL_BYTES_IMPL
+private:
+  const char *dma_src_off_ptr;
+  const unsigned int dma_src_offset;
+  const unsigned int dma_dst_offset;
+  const unsigned int dma_src_step_stride;
+  const unsigned int dma_dst_step_stride;
+  const unsigned int dma_src_elmt_stride;
+  const unsigned int dma_dst_elmt_stride;
+  const unsigned int dma_intra_elmt_stride;
+  const unsigned int dma_partial_bytes;
+  const unsigned int dma_partial_offset;
+  const unsigned int dma_partial_elmts;
+  const bool         dma_active_warp;
+  typedef CudaDMAMeta::DMABuffer<LOCAL_TYPENAME,BYTES_PER_THREAD/ALIGNMENT> BulkBuffer;
+  BulkBuffer bulk_buffer;
+  LOCAL_TYPENAME across_buffer[GUARD_ZERO(SPLIT_WARP ? ROW_ITERS_SPLIT : 
+  				BIG_ELMTS ? 1 : ROW_ITERS_FULL)*ALIGNMENT/sizeof(LOCAL_TYPENAME)];
 };
 #undef LOCAL_TYPENAME
 #undef ALIGNMENT
-#endif
+
+#undef TEMPLATE_FOUR_IMPL
 
 #undef WARP_SPECIALIZED_UNQUALIFIED_METHODS
 #undef WARP_SPECIALIZED_QUALIFIED_METHODS

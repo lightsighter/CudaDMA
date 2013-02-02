@@ -53,10 +53,10 @@ enum CudaDMALoadQualifier {
 };
 
 enum CudaDMAStoreQualifier {
-  STORE_WRITE_BACK,
-  STORE_CACHE_GLOBAL,
-  STORE_CACHE_STREAMING,
-  STORE_CACHE_WRITE_THROUGH,
+  STORE_WRITE_BACK, // write-back all coherent levels
+  STORE_CACHE_GLOBAL, // cache in L2 and below
+  STORE_CACHE_STREAMING, // mark as first evict
+  STORE_CACHE_WRITE_THROUGH, // write through L2 to system memory
 };
 
 __device__ __forceinline__ 
@@ -702,27 +702,27 @@ namespace CudaDMAMeta {
   public:
     template<unsigned IDX, bool GLOBAL_LOAD, int LOAD_QUAL>
     __device__ __forceinline__
-    void perform_load(const void *src_ptr)
+    void perform_load(const void *RESTRICT src_ptr)
     {
       perform_load_impl<GUARD_OVERFLOW(IDX,NUM_ELMTS),GLOBAL_LOAD,LOAD_QUAL>(src_ptr);
     }
     template<unsigned IDX, int STORE_QUAL>
     __device__ __forceinline__
-    void perform_store(void *dst_ptr) const
+    void perform_store(void *RESTRICT dst_ptr) const
     {
       perform_store_impl<GUARD_OVERFLOW(IDX,NUM_ELMTS),STORE_QUAL>(dst_ptr);
     }
   private:
     template<unsigned IDX, bool GLOBAL_LOAD, int LOAD_QUAL>
     __device__ __forceinline__
-    void perform_load_impl(const void *src_ptr)
+    void perform_load_impl(const void *RESTRICT src_ptr)
     {
       STATIC_ASSERT(IDX < NUM_ELMTS);
       buffer[IDX] = ptx_cudaDMA_load<ET, GLOBAL_LOAD, LOAD_QUAL>((const ET*)src_ptr);
     }
     template<unsigned IDX, int STORE_QUAL>
     __device__ __forceinline__
-    void perform_store_impl(void *dst_ptr) const
+    void perform_store_impl(void *RESTRICT dst_ptr) const
     {
       STATIC_ASSERT(IDX < NUM_ELMTS);
       ptx_cudaDMA_store<ET, STORE_QUAL>(buffer[IDX], (ET*)dst_ptr);
@@ -889,7 +889,7 @@ namespace CudaDMAMeta {
   struct NestedBufferLoader 
   {
     static __device__ __forceinline__
-    void load_all(BUFFER &buffer, const char *src, int out_stride, int in_stride)
+    void load_all(BUFFER &buffer, const char *RESTRICT src, int out_stride, int in_stride)
     {
       BufferLoader<BUFFER,(OUTER_MAX-OUTER_IDX)*OUTER_SCALE,
         INNER_STRIDE,INNER_MAX,INNER_MAX,GLOBAL_LOAD,LOAD_QUAL>::load_all
@@ -898,6 +898,29 @@ namespace CudaDMAMeta {
         OUTER_MAX,OUTER_IDX-OUTER_STRIDE,GLOBAL_LOAD,LOAD_QUAL>::load_all
           (buffer,src+out_stride,out_stride,in_stride);
     }
+    template<int ELMT_SIZE>
+    static __device__ __forceinline__
+    void load_indirect(BUFFER &buffer, const char *RESTRICT src, int in_stride,
+                       const int *index, const int index_stride)
+    {
+      BufferLoader<BUFFER,(OUTER_MAX-OUTER_IDX)*OUTER_SCALE,
+        INNER_STRIDE,INNER_MAX,INNER_MAX,GLOBAL_LOAD,LOAD_QUAL>::load_all
+          (buffer, src+((*index)*ELMT_SIZE), in_stride);
+      NestedBufferLoader<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,
+        OUTER_MAX,OUTER_IDX-OUTER_STRIDE,GLOBAL_LOAD,LOAD_QUAL>::load_indirect<ELMT_SIZE>
+          (buffer, src, in_stride, index+index_stride, index_stride);
+    }
+    static __device__ __forceinline__
+    void load_indirect(BUFFER &buffer, const char *RESTRICT src, int in_stride,
+                       const int *index, const int index_stride, const int elmt_size)
+    {
+      BufferLoader<BUFFER,(OUTER_MAX-OUTER_IDX)*OUTER_SCALE,
+        INNER_STRIDE,INNER_MAX,INNER_MAX,GLOBAL_LOAD,LOAD_QUAL>::load_all
+          (buffer, src+((*index)*elmt_size), in_stride);
+      NestedBufferLoader<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,
+        OUTER_MAX,OUTER_IDX-OUTER_STRIDE,GLOBAL_LOAD,LOAD_QUAL>::load_indirect
+          (buffer, src, in_stride, index+index_stride, index_stride, elmt_size);
+    }
   };
 
   template<typename BUFFER, int INNER_STRIDE, int INNER_MAX, int OUTER_SCALE, int OUTER_STRIDE,
@@ -905,7 +928,20 @@ namespace CudaDMAMeta {
   struct NestedBufferLoader<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,0,0,GLOBAL_LOAD,LOAD_QUAL>
   {
     static __device__ __forceinline__
-    void load_all(BUFFER &buffer, const char *src, unsigned out_stride, unsigned in_stride)
+    void load_all(BUFFER &buffer, const char *RESTRICT src, unsigned out_stride, unsigned in_stride)
+    {
+      // Do nothing
+    }
+    template<int ELMT_SIZE>
+    static __device__ __forceinline__
+    void load_indirect(BUFFER &buffer, const char *RESTRICT, int in_stride,
+                       const int *index, const int index_stride)
+    {
+      // Do nothing
+    }
+    static __device__ __forceinline__
+    void load_indirect(BUFFER &buffer, const char *RESTRICT, int in_stride,
+                       const int *index, const int index_stride, const int elmt_size)
     {
       // Do nothing
     }
@@ -916,10 +952,27 @@ namespace CudaDMAMeta {
   struct NestedBufferLoader<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,OUTER_MAX,1,GLOBAL_LOAD,LOAD_QUAL>
   {
     static __device__ __forceinline__
-    void load_all(BUFFER &buffer, const char *src, unsigned out_stride, unsigned in_stride)
+    void load_all(BUFFER &buffer, const char *RESTRICT src, unsigned out_stride, unsigned in_stride)
     {
       BufferLoader<BUFFER,(OUTER_MAX-1)*OUTER_SCALE,INNER_STRIDE,INNER_MAX,INNER_MAX,GLOBAL_LOAD,LOAD_QUAL>::load_all
         (buffer, src, in_stride);
+    }
+    template<int ELMT_SIZE>
+    static __device__ __forceinline__
+    void load_indirect(BUFFER &buffer, const char *RESTRICT src, int in_stride,
+                       const int *index, const int index_stride)
+    {
+      BufferLoader<BUFFER,(OUTER_MAX-1)*OUTER_SCALE,
+        INNER_STRIDE,INNER_MAX,INNER_MAX,GLOBAL_LOAD,LOAD_QUAL>::load_all
+          (buffer, src+((*index)*ELMT_SIZE), in_stride);
+    }
+    static __device__ __forceinline__
+    void load_indirect(BUFFER &buffer, const char *RESTRICT src, int in_stride,
+                       const int *index, const int index_stride, const int elmt_size)
+    {
+      BufferLoader<BUFFER,(OUTER_MAX-1)*OUTER_SCALE,
+        INNER_STRIDE,INNER_MAX,INNER_MAX,GLOBAL_LOAD,LOAD_QUAL>::load_all
+          (buffer, src+((*index)*elmt_size), in_stride);
     }
   };
 
@@ -933,7 +986,7 @@ namespace CudaDMAMeta {
   struct NestedBufferStorer
   {
     static __device__ __forceinline__
-    void store_all(const BUFFER &buffer, char *dst, int out_stride, int in_stride)
+    void store_all(const BUFFER &buffer, char *RESTRICT dst, int out_stride, int in_stride)
     {
       BufferStorer<BUFFER,(OUTER_MAX-OUTER_IDX)*OUTER_SCALE,
         INNER_STRIDE,INNER_MAX,INNER_MAX,STORE_QUAL>::store_all
@@ -942,6 +995,29 @@ namespace CudaDMAMeta {
         OUTER_MAX,OUTER_IDX-OUTER_STRIDE,STORE_QUAL>::store_all
           (buffer,dst+out_stride,out_stride,in_stride);
     }
+    template<int ELMT_SIZE>
+    static __device__ __forceinline__
+    void store_indirect(const BUFFER &buffer, char *RESTRICT dst, int in_stride,
+                        const int *index, const int index_stride)
+    {
+      BufferStorer<BUFFER,(OUTER_MAX-OUTER_IDX)*OUTER_SCALE,
+        INNER_STRIDE,INNER_MAX,INNER_MAX,STORE_QUAL>::store_all
+          (buffer, dst+((*index)*ELMT_SIZE), in_stride);
+      NestedBufferStorer<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,
+        OUTER_MAX,OUTER_IDX-OUTER_STRIDE,STORE_QUAL>::store_indirect<ELMT_SIZE>
+          (buffer, dst, in_stride, index+index_stride, index_stride);
+    }
+    static __device__ __forceinline__
+    void store_indirect(const BUFFER &buffer, char *RESTRICT dst, int in_stride,
+                        const int *index, const int index_stride, int elmt_size)
+    {
+      BufferStorer<BUFFER,(OUTER_MAX-OUTER_IDX)*OUTER_SCALE,
+        INNER_STRIDE,INNER_MAX,INNER_MAX,STORE_QUAL>::store_all
+          (buffer, dst+((*index)*elmt_size), in_stride);
+      NestedBufferStorer<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,
+        OUTER_MAX,OUTER_IDX-OUTER_STRIDE,STORE_QUAL>::store_indirect
+          (buffer, dst, in_stride, index+index_stride, index_stride, elmt_size);
+    }
   };
 
   template<typename BUFFER, int INNER_STRIDE, int INNER_MAX, int OUTER_SCALE, int OUTER_STRIDE,
@@ -949,7 +1025,20 @@ namespace CudaDMAMeta {
   struct NestedBufferStorer<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,0,0,STORE_QUAL>
   {
     static __device__ __forceinline__
-    void store_all(const BUFFER &buffer, char *dst, unsigned out_stride, unsigned in_stride)
+    void store_all(const BUFFER &buffer, char *RESTRICT dst, unsigned out_stride, unsigned in_stride)
+    {
+      // Do nothing
+    }
+    template<int ELMT_SIZE>
+    static __device__ __forceinline__
+    void store_indirect(const BUFFER &buffer, char *RESTRICT dst, int in_stride,
+                        const int *index, const int index_stride)
+    {
+      // Do nothing
+    }
+    static __device__ __forceinline__
+    void store_indirect(const BUFFER &buffer, char *RESTRICT dst, int in_stride,
+                        const int *index, const int index_stride, const int elmt_size)
     {
       // Do nothing
     }
@@ -960,10 +1049,27 @@ namespace CudaDMAMeta {
   struct NestedBufferStorer<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,OUTER_MAX,1,STORE_QUAL>
   {
     static __device__ __forceinline__
-    void store_all(const BUFFER &buffer, char *dst, unsigned out_stride, unsigned in_stride)
+    void store_all(const BUFFER &buffer, char *RESTRICT dst, unsigned out_stride, unsigned in_stride)
     {
       BufferStorer<BUFFER,(OUTER_MAX-1)*OUTER_SCALE,INNER_STRIDE,INNER_MAX,INNER_MAX,STORE_QUAL>::store_all
         (buffer, dst, in_stride);
+    }
+    template<int ELMT_SIZE>
+    static __device__ __forceinline__
+    void store_indirect(const BUFFER &buffer, char *RESTRICT dst, int in_stride,
+                        const int *index, const int index_stride)
+    {
+      BufferStorer<BUFFER,(OUTER_MAX-1)*OUTER_SCALE,
+        INNER_STRIDE,INNER_MAX,INNER_MAX,STORE_QUAL>::store_all
+          (buffer, dst+((*index)*ELMT_SIZE), in_stride);
+    }
+    static __device__ __forceinline__
+    void store_indirect(const BUFFER &buffer, char *RESTRICT dst, int in_stride,
+                        const int *index, const int index_stride, const int elmt_size)
+    {
+      BufferStorer<BUFFER,(OUTER_MAX-1)*OUTER_SCALE,
+        INNER_STRIDE,INNER_MAX,INNER_MAX,STORE_QUAL>::store_all
+          (buffer, dst+((*index)*elmt_size), in_stride);
     }
   };
 
@@ -977,7 +1083,7 @@ namespace CudaDMAMeta {
   struct NestedConditionalLoader
   {
     static __device__ __forceinline__
-    void load_all(BUFFER &buffer, const char *src, int out_stride, int in_stride, int actual_max)
+    void load_all(BUFFER &buffer, const char *RESTRICT src, int out_stride, int in_stride, int actual_max)
     {
       if ((OUTER_MAX-OUTER_IDX) < actual_max)
       {
@@ -989,6 +1095,35 @@ namespace CudaDMAMeta {
             (buffer,src+out_stride,out_stride,in_stride,actual_max);
       }
     }
+    template<int ELMT_SIZE>
+    static __device__ __forceinline__
+    void load_indirect(BUFFER &buffer, const char *RESTRICT src, int in_stride, int actual_max,
+                       const int *index, const int index_stride)
+    {
+      if ((OUTER_MAX-OUTER_IDX) < actual_max)
+      {
+        BufferLoader<BUFFER,(OUTER_MAX-OUTER_IDX)*OUTER_SCALE,INNER_STRIDE,
+          INNER_MAX,INNER_MAX,GLOBAL_LOAD,LOAD_QUAL>::load_all
+            (buffer, src+((*index)*ELMT_SIZE), in_stride);
+        NestedConditionalLoader<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,OUTER_MAX,
+          OUTER_IDX-OUTER_STRIDE,GLOBAL_LOAD,LOAD_QUAL>::load_indirect<ELMT_SIZE>
+            (buffer, src, in_stride, actual_max, index+index_stride, index_stride);
+      }
+    }
+    static __device__ __forceinline__
+    void load_indirect(BUFFER &buffer, const char *RESTRICT src, int in_stride, int actual_max,
+                       const int *index, const int index_stride, const int elmt_size)
+    {
+      if ((OUTER_MAX-OUTER_IDX) < actual_max)
+      {
+        BufferLoader<BUFFER,(OUTER_MAX-OUTER_IDX)*OUTER_SCALE,INNER_STRIDE,
+          INNER_MAX,INNER_MAX,GLOBAL_LOAD,LOAD_QUAL>::load_all
+            (buffer, src+((*index)*elmt_size), in_stride);
+        NestedConditionalLoader<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,OUTER_MAX,
+          OUTER_IDX-OUTER_STRIDE,GLOBAL_LOAD,LOAD_QUAL>::load_indirect
+            (buffer, src, in_stride, actual_max, index+index_stride, index_stride, elmt_size);
+      }
+    }
   };
            
   template<typename BUFFER, int INNER_STRIDE, int INNER_MAX, int OUTER_SCALE, int OUTER_STRIDE,
@@ -996,9 +1131,22 @@ namespace CudaDMAMeta {
   struct NestedConditionalLoader<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,0,0,GLOBAL_LOAD,LOAD_QUAL>
   {
     static __device__ __forceinline__
-    void load_all(BUFFER &buffer, const char *src, int out_stride, int in_stride, int actual_max)
+    void load_all(BUFFER &buffer, const char *RESTRICT src, int out_stride, int in_stride, int actual_max)
     {
-      // do nothing
+      // Do nothing
+    }
+    template<int ELMT_SIZE>
+    static __device__ __forceinline__
+    void load_indirect(BUFFER &buffer, const char *RESTRICT src, int in_stride, int actual_max,
+                       const int *index, const int index_stride)
+    {
+      // Do nothing
+    }
+    static __device__ __forceinline__
+    void load_indirect(BUFFER &buffer, const char *RESTRICT src, int in_stride, int actual_max,
+                       const int *index, const int index_stride, const int elmt_size)
+    {
+      // Do nothing
     }
   };
 
@@ -1007,13 +1155,36 @@ namespace CudaDMAMeta {
   struct NestedConditionalLoader<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,OUTER_MAX,1,GLOBAL_LOAD,LOAD_QUAL>
   {
     static __device__ __forceinline__
-    void load_all(BUFFER &buffer, const char *src, int out_stride, int in_stride, int actual_max)
+    void load_all(BUFFER &buffer, const char *RESTRICT src, int out_stride, int in_stride, int actual_max)
     {
       if ((OUTER_MAX-1) < actual_max)
       {
         BufferLoader<BUFFER,(OUTER_MAX-1)*OUTER_SCALE,INNER_STRIDE,INNER_MAX,
           INNER_MAX,GLOBAL_LOAD,LOAD_QUAL>::load_all
             (buffer, src, in_stride);
+      }
+    }
+    template<int ELMT_SIZE>
+    static __device__ __forceinline__
+    void load_indirect(BUFFER &buffer, const char *RESTRICT src, int in_stride, int actual_max,
+                       const int *index, const int index_stride)
+    {
+      if ((OUTER_MAX-1) < actual_max)
+      {
+        BufferLoader<BUFFER,(OUTER_MAX-1)*OUTER_SCALE,INNER_STRIDE,INNER_MAX,
+          INNER_MAX,GLOBAL_LOAD,LOAD_QUAL>::load_all
+            (buffer, src+((*index)*ELMT_SIZE), in_stride);
+      }
+    }
+    static __device__ __forceinline__
+    void load_indirect(BUFFER &buffer, const char *RESTRICT src, int in_stride, int actual_max,
+                       const int *index, const int index_stride, const int elmt_size)
+    {
+      if ((OUTER_MAX-1) < actual_max)
+      {
+        BufferLoader<BUFFER,(OUTER_MAX-1)*OUTER_SCALE,INNER_STRIDE,INNER_MAX,
+          INNER_MAX,GLOBAL_LOAD,LOAD_QUAL>::load_all
+            (buffer, src+((*index)*elmt_size), in_stride);
       }
     }
   };
@@ -1028,7 +1199,7 @@ namespace CudaDMAMeta {
   struct NestedConditionalStorer
   {
     static __device__ __forceinline__
-    void store_all(const BUFFER &buffer, char *dst, int out_stride, int in_stride, int actual_max)
+    void store_all(const BUFFER &buffer, char *RESTRICT dst, int out_stride, int in_stride, int actual_max)
     {
       if ((OUTER_MAX-OUTER_IDX) < actual_max)
       {
@@ -1040,6 +1211,35 @@ namespace CudaDMAMeta {
             (buffer,dst+out_stride,out_stride,in_stride,actual_max);
       }
     }
+    template<int ELMT_SIZE>
+    static __device__ __forceinline__
+    void store_indirect(const BUFFER &buffer, char *RESTRICT dst, int in_stride, int actual_max,
+                        const int *index, const int index_stride)
+    {
+      if ((OUTER_MAX-OUTER_IDX) < actual_max)
+      {
+        BufferStorer<BUFFER,(OUTER_MAX-OUTER_IDX)*OUTER_SCALE,INNER_STRIDE,
+          INNER_MAX,INNER_MAX,STORE_QUAL>::store_all
+            (buffer, dst+((*index)*ELMT_SIZE), in_stride);
+        NestedConditionalStorer<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,OUTER_MAX,
+          OUTER_IDX-OUTER_STRIDE,STORE_QUAL>::store_indirect<ELMT_SIZE>
+            (buffer, dst, in_stride, actual_max, index+index_stride, index_stride);
+      }
+    }
+    static __device__ __forceinline__
+    void store_indirect(const BUFFER &buffer, char *RESTRICT dst, int in_stride, int actual_max,
+                        const int *index, const int index_stride, const int elmt_size)
+    {
+      if ((OUTER_MAX-OUTER_IDX) < actual_max)
+      {
+        BufferStorer<BUFFER,(OUTER_MAX-OUTER_IDX)*OUTER_SCALE,INNER_STRIDE,
+          INNER_MAX,INNER_MAX,STORE_QUAL>::store_all
+            (buffer, dst+((*index)*elmt_size), in_stride);
+        NestedConditionalStorer<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,OUTER_MAX,
+          OUTER_IDX-OUTER_STRIDE,STORE_QUAL>::store_indirect
+            (buffer, dst, in_stride, actual_max, index+index_stride, index_stride, elmt_size);
+      }
+    }
   };
            
   template<typename BUFFER, int INNER_STRIDE, int INNER_MAX, int OUTER_SCALE, int OUTER_STRIDE,
@@ -1047,9 +1247,22 @@ namespace CudaDMAMeta {
   struct NestedConditionalStorer<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,0,0,STORE_QUAL>
   {
     static __device__ __forceinline__
-    void store_all(const BUFFER &buffer, char *dst, int out_stride, int in_stride, int actual_max)
+    void store_all(const BUFFER &buffer, char *RESTRICT dst, int out_stride, int in_stride, int actual_max)
     {
-      // do nothing
+      // Do nothing
+    }
+    template<int ELMT_SIZE>
+    static __device__ __forceinline__
+    void store_indirect(const BUFFER &buffer, char *RESTRICT dst, int in_stride, int actual_max,
+                        const int *index, const int index_stride)
+    {
+      // Do nothing
+    }
+    static __device__ __forceinline__
+    void store_indirect(const BUFFER &buffer, char *RESTRICT dst, int in_stride, int actual_max,
+                        const int *index, const int index_stride, const int elmt_size)
+    {
+      // Do nothing
     }
   };
 
@@ -1058,13 +1271,36 @@ namespace CudaDMAMeta {
   struct NestedConditionalStorer<BUFFER,INNER_STRIDE,INNER_MAX,OUTER_SCALE,OUTER_STRIDE,OUTER_MAX,1,STORE_QUAL>
   {
     static __device__ __forceinline__
-    void store_all(const BUFFER &buffer, char *dst, int out_stride, int in_stride, int actual_max)
+    void store_all(const BUFFER &buffer, char *RESTRICT dst, int out_stride, int in_stride, int actual_max)
     {
       if ((OUTER_MAX-1) < actual_max)
       {
         BufferStorer<BUFFER,(OUTER_MAX-1)*OUTER_SCALE,INNER_STRIDE,INNER_MAX,
           INNER_MAX,STORE_QUAL>::store_all
             (buffer, dst, in_stride);
+      }
+    }
+    template<int ELMT_SIZE>
+    static __device__ __forceinline__
+    void store_indirect(const BUFFER &buffer, char *RESTRICT dst, int in_stride, int actual_max,
+                        const int *index, const int index_stride)
+    {
+      if ((OUTER_MAX-1) < actual_max)
+      {
+        BufferStorer<BUFFER,(OUTER_MAX-1)*OUTER_SCALE,INNER_STRIDE,INNER_MAX,
+          INNER_MAX,STORE_QUAL>::store_all
+            (buffer, dst+((*index)*ELMT_SIZE), in_stride);
+      }
+    }
+    static __device__ __forceinline__
+    void store_indirect(const BUFFER &buffer, char *RESTRICT dst, int in_stride, int actual_max,
+                        const int *index, const int index_stride, const int elmt_size)
+    {
+      if ((OUTER_MAX-1) < actual_max)
+      {
+        BufferStorer<BUFFER,(OUTER_MAX-1)*OUTER_SCALE,INNER_STRIDE,INNER_MAX,
+          INNER_MAX,STORE_QUAL>::store_all
+            (buffer, dst+((*index)*elmt_size), in_stride);
       }
     }
   };
@@ -3038,6 +3274,24 @@ public:
   }                                                                                                 \
   template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                                                 \
   __device__ __forceinline__ void load_across(const char *RESTRICT src_ptr,                         \
+                                              const int partial_bytes, const int offset)            \
+  {                                                                                                 \
+    switch (partial_bytes)                                                                          \
+    {                                                                                               \
+      case 0:                                                                                       \
+        break;                                                                                      \
+      case 4:                                                                                       \
+        {                                                                                           \
+          across_buffer[offset] = ptx_cudaDMA_load<float,                                           \
+            DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);                                        \
+          break;                                                                                    \
+        }                                                                                           \
+      default:                                                                                      \
+        assert(false);                                                                              \
+    }                                                                                               \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                                                 \
+  __device__ __forceinline__ void load_across(const char *RESTRICT src_ptr,                         \
                                               const int src_elmt_stride, const int partial_bytes,   \
                                               const int row_iters)                                  \
   {                                                                                                 \
@@ -3083,6 +3337,22 @@ public:
   }                                                                                                 \
   template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                                                 \
   __device__ __forceinline__ void load_across(const char *RESTRICT src_ptr,                         \
+                                              const int partial_bytes, const int offset)            \
+  {                                                                                                 \
+    switch (partial_bytes)                                                                          \
+    {                                                                                               \
+      case 0:                                                                                       \
+        break;                                                                                      \
+      case 4:                                                                                       \
+        {                                                                                           \
+          across_buffer[offset] = ptx_cudaDMA_load<float,                                           \
+            DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);                                        \
+          break;                                                                                    \
+        }                                                                                           \
+    }                                                                                               \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                                                 \
+  __device__ __forceinline__ void load_across(const char *RESTRICT src_ptr,                         \
                                               const int src_elmt_stride, const int partial_bytes,   \
                                               const int row_iters)                                  \
   {                                                                                                 \
@@ -3140,6 +3410,30 @@ public:
   }                                                                                                 \
   template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                                                 \
   __device__ __forceinline__ void load_across(const char *RESTRICT src_ptr,                         \
+                                              const int partial_bytes, const int offset)            \
+  {                                                                                                 \
+    switch (partial_bytes)                                                                          \
+    {                                                                                               \
+      case 0:                                                                                       \
+        break;                                                                                      \
+      case 4:                                                                                       \
+        {                                                                                           \
+          across_buffer[offset].x = ptx_cudaDMA_load<float,                                         \
+            DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);                                        \
+          break;                                                                                    \
+        }                                                                                           \
+      case 8:                                                                                       \
+        {                                                                                           \
+          across_buffer[offset] = ptx_cudaDMA_load<float2,                                          \
+            DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)src_ptr);                                       \
+          break;                                                                                    \
+        }                                                                                           \
+      default:                                                                                      \
+        assert(false);                                                                              \
+    }                                                                                               \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                                                 \
+  __device__ __forceinline__ void load_across(const char *RESTRICT src_ptr,                         \
                                               const int src_elmt_stride, const int partial_bytes,   \
                                               const int row_iters)                                  \
   {                                                                                                 \
@@ -3199,6 +3493,28 @@ public:
               DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)src_ptr);                                     \
             src_ptr += src_elmt_stride;                                                             \
           }                                                                                         \
+          break;                                                                                    \
+        }                                                                                           \
+    }                                                                                               \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                                                 \
+  __device__ __forceinline__ void load_across(const char *RESTRICT src_ptr,                         \
+                                              const int partial_bytes, const int offset)            \
+  {                                                                                                 \
+    switch (partial_bytes)                                                                          \
+    {                                                                                               \
+      case 0:                                                                                       \
+        break;                                                                                      \
+      case 4:                                                                                       \
+        {                                                                                           \
+          across_buffer[offset].x = ptx_cudaDMA_load<float,                                         \
+              DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);                                      \
+          break;                                                                                    \
+        }                                                                                           \
+      case 8:                                                                                       \
+        {                                                                                           \
+          across_buffer[offset] = ptx_cudaDMA_load<float2,                                          \
+            DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)src_ptr);                                       \
           break;                                                                                    \
         }                                                                                           \
     }                                                                                               \
@@ -3297,6 +3613,47 @@ public:
   }                                                                                                 \
   template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                                                 \
   __device__ __forceinline__ void load_across(const char *RESTRICT src_ptr,                         \
+                                              const int partial_bytes, const int offset)            \
+  {                                                                                                 \
+    switch (partial_bytes)                                                                          \
+    {                                                                                               \
+      case 0:                                                                                       \
+        break;                                                                                      \
+      case 4:                                                                                       \
+        {                                                                                           \
+          across_buffer[offset].x = ptx_cudaDMA_load<float,                                         \
+            DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);                                        \
+          break;                                                                                    \
+        }                                                                                           \
+      case 8:                                                                                       \
+        {                                                                                           \
+          float2 temp = ptx_cudaDMA_load<float2,                                                    \
+            DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)src_ptr);                                       \
+          across_buffer[offset].x = temp.x;                                                         \
+          across_buffer[offset].y = temp.y;                                                         \
+          break;                                                                                    \
+        }                                                                                           \
+      case 12:                                                                                      \
+        {                                                                                           \
+          float3 temp = ptx_cudaDMA_load<float3,                                                    \
+            DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float3*)src_ptr);                                       \
+          across_buffer[offset].x = temp.x;                                                         \
+          across_buffer[offset].y = temp.y;                                                         \
+          across_buffer[offset].z = temp.z;                                                         \
+          break;                                                                                    \
+        }                                                                                           \
+      case 16:                                                                                      \
+        {                                                                                           \
+          across_buffer[i] = ptx_cudaDMA_load<float4,                                               \
+            DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float4*)src_ptr);                                       \
+          break;                                                                                    \
+        }                                                                                           \
+      default:                                                                                      \
+        assert(false);                                                                              \
+    }                                                                                               \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                                                 \
+  __device__ __forceinline__ void load_across(const char *RESTRICT src_ptr,                         \
                                               const int src_elmt_stride, const int partial_bytes,   \
                                               const int row_iters)                                  \
   {                                                                                                 \
@@ -3406,6 +3763,45 @@ public:
               DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float4*)src_ptr);                                     \
             src_ptr += src_elmt_stride;                                                             \
           }                                                                                         \
+          break;                                                                                    \
+        }                                                                                           \
+    }                                                                                               \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                                                 \
+  __device__ __forceinline__ void load_across(const char *RESTRICT src_ptr,                         \
+                                              const int partial_bytes, const int offset)            \
+  {                                                                                                 \
+    switch (partial_bytes)                                                                          \
+    {                                                                                               \
+      case 0:                                                                                       \
+        break;                                                                                      \
+      case 4:                                                                                       \
+        {                                                                                           \
+          across_buffer[offset].x = ptx_cudaDMA_load<float,                                         \
+            DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);                                        \
+          break;                                                                                    \
+        }                                                                                           \
+      case 8:                                                                                       \
+        {                                                                                           \
+          float2 temp = ptx_cudaDMA_load<float2,                                                    \
+            DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)src_ptr);                                       \
+          across_buffer[offset].x = temp.x;                                                         \
+          across_buffer[offset].y = temp.y;                                                         \
+          break;                                                                                    \
+        }                                                                                           \
+      case 12:                                                                                      \
+        {                                                                                           \
+          float3 temp = ptx_cudaDMA_load<float3,                                                    \
+            DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float3*)src_ptr);                                       \
+          across_buffer[offset].x = temp.x;                                                         \
+          across_buffer[offset].y = temp.y;                                                         \
+          across_buffer[offset].z = temp.z;                                                         \
+          break;                                                                                    \
+        }                                                                                           \
+      case 16:                                                                                      \
+        {                                                                                           \
+          across_buffer[offset] = ptx_cudaDMA_load<float4,                                          \
+            DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float4*)src_ptr);                                       \
           break;                                                                                    \
         }                                                                                           \
     }                                                                                               \
@@ -3493,6 +3889,23 @@ public:
   }                                                                                                 \
   template<int DMA_STORE_QUAL>                                                                      \
   __device__ __forceinline__ void store_across(char *RESTRICT dst_ptr,                              \
+                                               const int partial_bytes, const int offset)           \
+  {                                                                                                 \
+    switch (partial_bytes)                                                                          \
+    {                                                                                               \
+      case 0:                                                                                       \
+        break;                                                                                      \
+      case 4:                                                                                       \
+        {                                                                                           \
+          ptx_cudaDMA_store<float,DMA_STORE_QUAL>(across_buffer[offset], (float*)dst_ptr);          \
+          break;                                                                                    \
+        }                                                                                           \
+      default:                                                                                      \
+        assert(false);                                                                              \
+    }                                                                                               \
+  }                                                                                                 \
+  template<int DMA_STORE_QUAL>                                                                      \
+  __device__ __forceinline__ void store_across(char *RESTRICT dst_ptr,                              \
                                                const int dst_elmt_stride, const int partial_bytes,  \
                                                const int row_iters)                                 \
   {                                                                                                 \
@@ -3530,6 +3943,21 @@ public:
             ptx_cudaDMA_store<float,DMA_STORE_QUAL>(across_buffer[i], (float*)dst_ptr);             \
             dst_ptr += dst_elmt_stride;                                                             \
           }                                                                                         \
+          break;                                                                                    \
+        }                                                                                           \
+    }                                                                                               \
+  }                                                                                                 \
+  template<int DMA_STORE_QUAL>                                                                      \
+  __device__ __forceinline__ void store_across(char *RESTRICT dst_ptr,                              \
+                                               const int partial_bytes, const int offset)           \
+  {                                                                                                 \
+    switch (partial_bytes)                                                                          \
+    {                                                                                               \
+      case 0:                                                                                       \
+        break;                                                                                      \
+      case 4:                                                                                       \
+        {                                                                                           \
+          ptx_cudaDMA_store<float,DMA_STORE_QUAL>(across_buffer[offset], (float*)dst_ptr);          \
           break;                                                                                    \
         }                                                                                           \
     }                                                                                               \
@@ -3582,6 +4010,28 @@ public:
             ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(across_buffer[i], (float2*)dst_ptr);           \
             dst_ptr += dst_elmt_stride;                                                             \
           }                                                                                         \
+          break;                                                                                    \
+        }                                                                                           \
+      default:                                                                                      \
+        assert(false);                                                                              \
+    }                                                                                               \
+  }                                                                                                 \
+  template<int DMA_STORE_QUAL>                                                                      \
+  __device__ __forceinline__ void store_across(char *RESTRICT dst_ptr,                              \
+                                               const int partial_bytes, const int offset)           \
+  {                                                                                                 \
+    switch (partial_bytes)                                                                          \
+    {                                                                                               \
+      case 0:                                                                                       \
+        break;                                                                                      \
+      case 4:                                                                                       \
+        {                                                                                           \
+          ptx_cudaDMA_store<float,DMA_STORE_QUAL>(across_buffer[offset].x, (float2*)dst_ptr);       \
+          break;                                                                                    \
+        }                                                                                           \
+      case 8:                                                                                       \
+        {                                                                                           \
+          ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(across_buffer[offset], (float2*)dst_ptr);        \
           break;                                                                                    \
         }                                                                                           \
       default:                                                                                      \
@@ -3651,6 +4101,26 @@ public:
   }                                                                                                 \
   template<int DMA_STORE_QUAL>                                                                      \
   __device__ __forceinline__ void store_across(char *RESTRICT dst_ptr,                              \
+                                               const int partial_bytes, const int offset)           \
+  {                                                                                                 \
+    switch (partial_bytes)                                                                          \
+    {                                                                                               \
+      case 0:                                                                                       \
+        break;                                                                                      \
+      case 4:                                                                                       \
+        {                                                                                           \
+          ptx_cudaDMA_store<float,DMA_STORE_QUAL>(across_buffer[offset].x, (float*)dst_ptr);        \
+          break;                                                                                    \
+        }                                                                                           \
+      case 8:                                                                                       \
+        {                                                                                           \
+          ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(across_buffer[offset], (float2*)dst_ptr);        \
+          break;                                                                                    \
+        }                                                                                           \
+    }                                                                                               \
+  }                                                                                                 \
+  template<int DMA_STORE_QUAL>                                                                      \
+  __device__ __forceinline__ void store_across(char *RESTRICT dst_ptr,                              \
                                                const int dst_elmt_stride, const int partial_bytes,  \
                                                const int row_iters)                                 \
   {                                                                                                 \
@@ -3731,6 +4201,42 @@ public:
             ptx_cudaDMA_store<float4,DMA_STORE_QUAL>(across_buffer[i], (float4*)dst_ptr);           \
             dst_ptr += dst_elmt_stride;                                                             \
           }                                                                                         \
+          break;                                                                                    \
+        }                                                                                           \
+      default:                                                                                      \
+        assert(false);                                                                              \
+    }                                                                                               \
+  }                                                                                                 \
+  template<int DMA_STORE_QUAL>                                                                      \
+  __device__ __forceinline__ void store_across(char *RESTRICT dst_ptr,                              \
+                                               const int partial_bytes, const int offset)           \
+  {                                                                                                 \
+    switch (partial_bytes)                                                                          \
+    {                                                                                               \
+      case 0:                                                                                       \
+        break;                                                                                      \
+      case 4:                                                                                       \
+        {                                                                                           \
+          ptx_cudaDMA_store<float,DMA_STORE_QUAL>(across_buffer[offset].x, (float*)dst_ptr);        \
+          break;                                                                                    \
+        }                                                                                           \
+      case 8:                                                                                       \
+        {                                                                                           \
+          ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(across_buffer[offset], (float2*)dst_ptr);        \
+          break;                                                                                    \
+        }                                                                                           \
+      case 12:                                                                                      \
+        {                                                                                           \
+          float3 temp;                                                                              \
+          temp.x = across_buffer[offset].x;                                                         \
+          temp.y = across_buffer[offset].y;                                                         \
+          temp.z = across_buffer[offset].z;                                                         \
+          ptx_cudaDMA_store<float3,DMA_STORE_QUAL>(temp, (float3*)dst_ptr);                         \
+          break;                                                                                    \
+        }                                                                                           \
+      case 16:                                                                                      \
+        {                                                                                           \
+          ptx_cudaDMA_store<float4,DMA_STORE_QUAL>(across_buffer[offset], (float4*)dst_ptr);        \
           break;                                                                                    \
         }                                                                                           \
       default:                                                                                      \
@@ -3841,6 +4347,43 @@ public:
             ptx_cudaDMA_store<float4,DMA_STORE_QUAL>(across_buffer[i], (float4*)dst_ptr);           \
             dst_ptr += dst_elmt_stride;                                                             \
           }                                                                                         \
+          break;                                                                                    \
+        }                                                                                           \
+    }                                                                                               \
+  }                                                                                                 \
+  template<int DMA_STORE_QUAL>                                                                      \
+  __device__ __forceinline__ void store_across(char *RESTRICT dst_ptr,                              \
+                                               const int partial_bytes, const int offset)           \
+  {                                                                                                 \
+    switch (partial_bytes)                                                                          \
+    {                                                                                               \
+      case 0:                                                                                       \
+        break;                                                                                      \
+      case 4:                                                                                       \
+        {                                                                                           \
+          ptx_cudaDMA_store<float,DMA_STORE_QUAL>(across_buffer[offset].x, (float*)dst_ptr);        \
+          break;                                                                                    \
+        }                                                                                           \
+      case 8:                                                                                       \
+        {                                                                                           \
+          float2 temp;                                                                              \
+          temp.x = across_buffer[offset].x;                                                         \
+          temp.y = across_buffer[offset].y;                                                         \
+          ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(temp, (float2*)dst_ptr);                         \
+          break;                                                                                    \
+        }                                                                                           \
+      case 12:                                                                                      \
+        {                                                                                           \
+          float3 temp;                                                                              \
+          temp.x = across_buffer[offset].x;                                                         \
+          temp.y = across_buffer[offset].y;                                                         \
+          temp.z = across_buffer[offset].z;                                                         \
+          ptx_cudaDMA_store<float3,DMA_STORE_QUAL>(temp, (float3*)dst_ptr);                         \
+          break;                                                                                    \
+        }                                                                                           \
+      case 16:                                                                                      \
+        {                                                                                           \
+          ptx_cudaDMA_store<float4,DMA_STORE_QUAL>(across_buffer[offset], (float4*)dst_ptr);        \
           break;                                                                                    \
         }                                                                                           \
     }                                                                                               \
@@ -8467,6 +9010,1670 @@ private:
 
 #undef TEMPLATE_FOUR_IMPL
 
+#undef STRIDED_START_XFER_IMPL
+#undef STRIDED_WAIT_XFER_IMPL
+
+#undef WARP_SPECIALIZED_UNQUALIFIED_METHODS
+#undef WARP_SPECIALIZED_QUALIFIED_METHODS
+#undef NON_WARP_SPECIALIZED_UNQUALIFIED_METHODS
+#undef NON_WARP_SPECIALIZED_QUALIFIED_METHODS
+////////////////////////  End of CudaDMAIndirect    //////////////////////////////////////////////////
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+// CudaDMAIndirect
+//////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * CudaDMA indirect shares a lot of implementation details with CudaDMAStrided.
+ * The only real difference is the level of indirection needed when computing
+ * the offset for either loading or storing depending on whether this instance
+ * is peforming a gather or a scatter.
+ */
+
+template<bool GATHER, bool DO_SYNC, int ALIGNMENT, int BYTES_PER_THREAD=4*ALIGNMENT, 
+         int BYTES_PER_ELMT=0, int DMA_THREADS=0, int NUM_ELMTS=0>
+class CudaDMAIndirect : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int dmaID,
+                             const int num_compute_threads,
+                             const int dma_threadIdx_start)
+    : CudaDMA(dmaID, DMA_THREADS, num_compute_threads, dma_threadIdx_start)
+  {
+    // This template should never be instantiated
+    STATIC_ASSERT(DO_SYNC && !DO_SYNC);
+  }
+};
+
+#define INIT_INDEX_OFFSET (SPLIT_WARP ? ELMT_ID_SPLIT : BIG_ELMTS ? 0 : ELMT_ID_FULL)
+#define INIT_INDEX_STEP_STRIDE (SPLIT_WARP ? ELMT_PER_STEP_SPLIT : BIG_ELMTS ? 1 : ELMT_PER_STEP_FULL)
+#define INIT_INDEX_ELMT_STRIDE (SPLIT_WARP ? (DMA_THREADS/THREADS_PER_ELMT) : \
+                                BIG_ELMTS ? 1 : (NUM_WARPS/WARPS_PER_ELMT))
+#define INIT_INDIRECT_OFFSET(_stride) (GATHER ? INIT_DST_OFFSET(_stride) : INIT_SRC_OFFSET(_stride))
+#define INIT_INDIRECT_ELMT_OFFSET (SPLIT_WARP ? (SPLIT_GROUP_TID * ALIGNMENT) : \
+                                   BIG_ELMTS ? (CUDADMA_DMA_TID * ALIGNMENT) : (FULL_GROUP_TID*ALIGNMENT))
+#define INIT_INDIRECT_STEP_STRIDE(_stride) (GATHER ? INIT_DST_STEP_STRIDE(_stride) :  \
+                                                     INIT_SRC_STEP_STRIDE(_stride))
+#define INIT_INDIRECT_ELMT_STRIDE(_stride) (GATHER ? INIT_DST_ELMT_STRIDE(_stride) :  \
+                                                     INIT_SRC_ELMT_STRIDE(_stride))
+#define SELECT_STRIDE(_stride)  ((_stride > BYTES_PER_ELMT) ? _stride : BYTES_PER_ELMT)
+
+#define WARP_SPECIALIZED_UNQUALIFIED_METHODS                                                        \
+  __device__ __forceinline__ void execute_dma(const int *RESTRICT index_ptr,                        \
+                        const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)                       \
+  {                                                                                                 \
+    start_xfer_async(index_ptr, src_ptr);                                                           \
+    wait_xfer_finish(dst_ptr);                                                                      \
+  }                                                                                                 \
+  __device__ __forceinline__ void start_xfer_async(const int *RESTRICT index_ptr,                   \
+                                                   const void *RESTRICT src_ptr)                    \
+  {                                                                                                 \
+    INDIRECT_START_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK)                                 \
+  }                                                                                                 \
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)                          \
+  {                                                                                                 \
+    CudaDMA::template wait_for_dma_start();                                                         \
+    INDIRECT_WAIT_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK)                                  \
+    CudaDMA::template finish_async_dma();                                                           \
+  }
+
+#define WARP_SPECIALIZED_QUALIFIED_METHODS                                                          \
+  template<bool DMA_GLOBAL_LOAD>                                                                    \
+  __device__ __forceinline__ void execute_dma(const int *RESTRICT index_ptr,                        \
+                        const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)                       \
+  {                                                                                                 \
+    start_xfer_async<DMA_GLOBAL_LOAD>(index_ptr, src_ptr);                                          \
+    wait_xfer_finish<DMA_GLOBAL_LOAD>(dst_ptr);                                                     \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD>                                                                    \
+  __device__ __forceinline__ void start_xfer_async(const int *RESTRICT index_ptr,                   \
+                                                   const void *RESTRICT src_ptr)                    \
+  {                                                                                                 \
+    INDIRECT_START_XFER_IMPL(DMA_GLOBAL_LOAD,LOAD_CACHE_ALL,STORE_WRITE_BACK)                       \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD>                                                                    \
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)                          \
+  {                                                                                                 \
+    CudaDMA::template wait_for_dma_start();                                                         \
+    INDIRECT_WAIT_XFER_IMPL(DMA_GLOBAL_LOAD,LOAD_CACHE_ALL,STORE_WRITE_BACK)                        \
+    CudaDMA::template finish_async_dma();                                                           \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>                             \
+  __device__ __forceinline__ void execute_dma(const int *RESTRICT index_ptr,                        \
+                        const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)                       \
+  {                                                                                                 \
+    start_xfer_async<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(index_ptr, src_ptr);             \
+    wait_xfer_finish<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(dst_ptr);                        \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>                             \
+  __device__ __forceinline__ void start_xfer_async(const int *RESTRICT index_ptr,                   \
+                                                   const void *RESTRICT src_ptr)                    \
+  {                                                                                                 \
+    INDIRECT_START_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)                          \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>                             \
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)                          \
+  {                                                                                                 \
+    CudaDMA::template wait_for_dma_start();                                                         \
+    INDIRECT_WAIT_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)                           \
+    CudaDMA::template finish_async_dma();                                                           \
+  }
+
+#define NON_WARP_SPECIALIZED_UNQUALIFIED_METHODS                                                    \
+  __device__ __forceinline__ void execute_dma(const int *RESTRICT index_ptr,                        \
+                        const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)                       \
+  {                                                                                                 \
+    start_xfer_async(index_ptr, src_ptr);                                                           \
+    wait_xfer_finish(dst_ptr);                                                                      \
+  }                                                                                                 \
+  __device__ __forceinline__ void start_xfer_async(const int *RESTRICT index_ptr,                   \
+                                                   const void *RESTRICT src_ptr)                    \
+  {                                                                                                 \
+    INDIRECT_START_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK)                                 \
+  }                                                                                                 \
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)                          \
+  {                                                                                                 \
+    INDIRECT_WAIT_XFER_IMPL(false,LOAD_CACHE_ALL,STORE_WRITE_BACK)                                  \
+  }
+
+#define NON_WARP_SPECIALIZED_QUALIFIED_METHODS                                                      \
+  template<bool DMA_GLOBAL_LOAD>                                                                    \
+  __device__ __forceinline__ void execute_dma(const void *RESTRICT index_ptr,                       \
+                          const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)                     \
+  {                                                                                                 \
+    start_xfer_async<DMA_GLOBAL_LOAD>(index_ptr, src_ptr);                                          \
+    wait_xfer_finish<DMA_GLOBAL_LOAD>(dst_ptr);                                                     \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD>                                                                    \
+  __device__ __forceinline__ void start_xfer_async(const int *RESTRICT index_ptr,                   \
+                                                   const void *RESTRICT src_ptr)                    \
+  {                                                                                                 \
+    INDIRECT_START_XFER_IMPL(DMA_GLOBAL_LOAD,LOAD_CACHE_ALL,STORE_WRITE_BACK)                       \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD>                                                                    \
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)                          \
+  {                                                                                                 \
+    INDIRECT_WAIT_XFER_IMPL(DMA_GLOBAL_LOAD,LOAD_CACHE_ALL,STORE_WRITE_BACK)                        \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>                             \
+  __device__ __forceinline__ void execute_dma(const int *RESTRICT index_ptr,                        \
+                        const void *RESTRICT src_ptr, void *RESTRICT dst_ptr)                       \
+  {                                                                                                 \
+    start_xfer_async<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(index_ptr, src_ptr);             \
+    wait_xfer_finish<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>(dst_ptr);                        \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>                             \
+  __device__ __forceinline__ void start_xfer_async(const int *RESTRICT index_ptr,                   \
+                                                   const void *RESTRICT src_ptr)                    \
+  {                                                                                                 \
+    INDIRECT_START_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)                          \
+  }                                                                                                 \
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>                             \
+  __device__ __forceinline__ void wait_xfer_finish(void *RESTRICT dst_ptr)                          \
+  {                                                                                                 \
+    INDIRECT_WAIT_XFER_IMPL(DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL)                           \
+  }
+
+#if 0
+// one template, warp-specialized
+#define LOCAL_TYPENAME float
+#define ALIGNMENT 4
+template<bool GATHER, int BYTES_PER_THREAD>
+class CudaDMAIndirect<GATHER,true,ALIGNMENT,BYTES_PER_THREAD,0,0,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int dmaID,
+                             const int num_dma_threads,
+                             const int num_compute_threads,
+                             const int dma_threadIdx_start,
+                             const int elmt_size_in_bytes,
+                             const int num_elements,
+                             const int alternate_stride = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float2
+#define ALIGNMENT 8
+template<bool GATHER, int BYTES_PER_THREAD>
+class CudaDMAIndirect<GATHER,true,ALIGNMENT,BYTES_PER_THREAD,0,0,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int dmaID,
+                             const int num_dma_threads,
+                             const int num_compute_threads,
+                             const int dma_threadIdx_start,
+                             const int elmt_size_in_bytes,
+                             const int num_elements,
+                             const int alternate_stride = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float4
+#define ALIGNMENT 16 
+template<bool GATHER, int BYTES_PER_THREAD>
+class CudaDMAIndirect<GATHER,true,ALIGNMENT,BYTES_PER_THREAD,0,0,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int dmaID,
+                             const int num_dma_threads,
+                             const int num_compute_threads,
+                             const int dma_threadIdx_start,
+                             const int elmt_size_in_bytes,
+                             const int num_elements,
+                             const int alternate_stride = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+// one template, non-warp-specialized
+#define LOCAL_TYPENAME float
+#define ALIGNMENT 4
+template<bool GATHER, int BYTES_PER_THREAD>
+class CudaDMAIndirect<GATHER,false,ALIGNMENT,BYTES_PER_THREAD,0,0,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int elmt_size_in_bytes,
+                             const int num_elements,
+                             const int alternate_stride = 0,
+                             const int num_dma_threads = 0,
+                             const int dma_threadIdx_start = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float2
+#define ALIGNMENT 8
+template<bool GATHER, int BYTES_PER_THREAD>
+class CudaDMAIndirect<GATHER,false,ALIGNMENT,BYTES_PER_THREAD,0,0,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int elmt_size_in_bytes,
+                             const int num_elements,
+                             const int alternate_stride = 0,
+                             const int num_dma_threads = 0,
+                             const int dma_threadIdx_start = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float4
+#define ALIGNMENT 16 
+template<bool GATHER, int BYTES_PER_THREAD>
+class CudaDMAIndirect<GATHER,false,ALIGNMENT,BYTES_PER_THREAD,0,0,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int elmt_size_in_bytes,
+                             const int num_elements,
+                             const int alternate_stride = 0,
+                             const int num_dma_threads = 0,
+                             const int dma_threadIdx_start = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+// two template, warp-specialized
+#define LOCAL_TYPENAME float
+#define ALIGNMENT 4
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT>
+class CudaDMAIndirect<GATHER,true,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,0,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int dmaID,
+                             const int num_dma_threads,
+                             const int num_compute_threads,
+                             const int dma_threadIdx_start,
+                             const int num_elements,
+                             const int alternate_stride = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float2
+#define ALIGNMENT 8
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT>
+class CudaDMAIndirect<GATHER,true,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,0,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int dmaID,
+                             const int num_dma_threads,
+                             const int num_compute_threads,
+                             const int dma_threadIdx_start,
+                             const int num_elements,
+                             const int alternate_stride = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float4
+#define ALIGNMENT 16 
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT>
+class CudaDMAIndirect<GATHER,true,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,0,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int dmaID,
+                             const int num_dma_threads,
+                             const int num_compute_threads,
+                             const int dma_threadIdx_start,
+                             const int num_elements,
+                             const int alternate_stride = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+// two template, non-warp-specialized
+#define LOCAL_TYPENAME float
+#define ALIGNMENT 4
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT>
+class CudaDMAIndirect<GATHER,false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,0,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int num_elements,
+                             const int alternate_stride = 0,
+                             const int num_dma_threads = 0,
+                             const int dma_threadIdx_start = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float2
+#define ALIGNMENT 8
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT>
+class CudaDMAIndirect<GATHER,false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,0,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int num_elements,
+                             const int alternate_stride = 0,
+                             const int num_dma_threads = 0,
+                             const int dma_threadIdx_start = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float4
+#define ALIGNMENT 16 
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT>
+class CudaDMAIndirect<GATHER,false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,0,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int num_elements,
+                             const int alternate_stride = 0,
+                             const int num_dma_threads = 0,
+                             const int dma_threadIdx_start = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+// three template, warp-specialized
+#define LOCAL_TYPENAME float
+#define ALIGNMENT 4
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
+class CudaDMAIndirect<GATHER,true,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int dmaID,
+                             const int num_compute_threads,
+                             const int dma_threadIdx_start,
+                             const int num_elements,
+                             const int alternate_stride = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float2
+#define ALIGNMENT 8
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
+class CudaDMAIndirect<GATHER,true,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int dmaID,
+                             const int num_compute_threads,
+                             const int dma_threadIdx_start,
+                             const int num_elements,
+                             const int alternate_stride = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float4
+#define ALIGNMENT 16 
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
+class CudaDMAIndirect<GATHER,true,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int dmaID,
+                             const int num_compute_threads,
+                             const int dma_threadIdx_start,
+                             const int num_elements,
+                             const int alternate_stride = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+// three template, non-warp-specizlied
+#define LOCAL_TYPENAME float
+#define ALIGNMENT 4
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
+class CudaDMAIndirect<GATHER,false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int num_elements,
+                             const int alternate_stride = 0,
+                             const int dma_threadIdx_start = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float2
+#define ALIGNMENT 8
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
+class CudaDMAIndirect<GATHER,false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int num_elements,
+                             const int alternate_stride = 0,
+                             const int dma_threadIdx_start = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float4
+#define ALIGNMENT 16 
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS>
+class CudaDMAIndirect<GATHER,false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,0> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int num_elements,
+                             const int alternate_stride = 0,
+                             const int dma_threadIdx_start = 0)
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+#endif
+
+// four template, warp-specialized
+#define INDIRECT_START_XFER_IMPL(GLOBAL_LOAD,LOAD_QUAL,STORE_QUAL)                                          \
+  execute_start_xfer<GLOBAL_LOAD,LOAD_QUAL,SPLIT_WARP,BIG_ELMTS,                                            \
+                     STEP_ITERS_SPLIT,ROW_ITERS_SPLIT,COL_ITERS_SPLIT,                                      \
+                     STEP_ITERS_BIG,MAX_ITERS_BIG,PART_ITERS_BIG,                                           \
+                     STEP_ITERS_FULL,ROW_ITERS_FULL,COL_ITERS_FULL,                                         \
+                     HAS_PARTIAL_BYTES,HAS_PARTIAL_ELMTS,ALL_WARPS_ACTIVE>(index_ptr, src_ptr);
+
+#define INDIRECT_WAIT_XFER_IMPL(GLOBAL_LOAD,LOAD_QUAL,STORE_QUAL)                                           \
+  execute_wait_xfer<GLOBAL_LOAD,LOAD_QUAL,STORE_QUAL,SPLIT_WARP,BIG_ELMTS,                                  \
+                    STEP_ITERS_SPLIT,ROW_ITERS_SPLIT,COL_ITERS_SPLIT,                                       \
+                    STEP_ITERS_BIG,MAX_ITERS_BIG,PART_ITERS_BIG,                                            \
+                    STEP_ITERS_FULL,ROW_ITERS_FULL,COL_ITERS_FULL,                                          \
+                    HAS_PARTIAL_BYTES,HAS_PARTIAL_ELMTS,ALL_WARPS_ACTIVE>(dst_ptr);
+
+#define TEMPLATE_FOUR_IMPL                                                                                  \
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, bool DMA_IS_SPLIT, bool DMA_IS_BIG,                     \
+           int DMA_STEP_ITERS_SPLIT, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_SPLIT,                      \
+           int DMA_STEP_ITERS_BIG,   int DMA_MAX_ITERS_BIG,   int DMA_PART_ITERS_BIG,                       \
+           int DMA_STEP_ITERS_FULL,  int DMA_ROW_ITERS_FULL,  int DMA_COL_ITERS_FULL,                       \
+	   bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS, bool DMA_ALL_WARPS_ACTIVE>                        \
+  __device__ __forceinline__ void execute_start_xfer(const int *RESTRICT index_ptr,                         \
+                                                     const void *RESTRICT src_ptr)                          \
+  {                                                                                                         \
+    this->dma_src_off_ptr = ((const char*)src_ptr) + (GATHER ? this->dma_elmt_offset : this->dma_offset);   \
+    this->dma_index_ptr = index_ptr;                                                                        \
+    if (DMA_IS_SPLIT)                                                                                       \
+    {                                                                                                       \
+      if (DMA_STEP_ITERS_SPLIT == 0)                                                                        \
+      {                                                                                                     \
+	load_all_partial_cases<DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,                                          \
+          DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>                            \
+            (this->dma_src_off_ptr, this->dma_index_offset);                                                \
+      }                                                                                                     \
+      else                                                                                                  \
+      {                                                                                                     \
+	load_all_partial_cases<DMA_PARTIAL_BYTES,false,                                                     \
+          DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>                            \
+            (this->dma_src_off_ptr, this->dma_index_offset);                                                \
+      }                                                                                                     \
+    }                                                                                                       \
+    else if (DMA_IS_BIG)                                                                                    \
+    {                                                                                                       \
+    }                                                                                                       \
+    else                                                                                                    \
+    {                                                                                                       \
+      if (DMA_ALL_WARPS_ACTIVE)                                                                             \
+      {                                                                                                     \
+	if (DMA_STEP_ITERS_FULL == 0)                                                                       \
+	{                                                                                                   \
+	  load_all_partial_cases<DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,                                        \
+            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>                            \
+              (this->dma_src_off_ptr, this->dma_index_offset);                                              \
+	}                                                                                                   \
+	else                                                                                                \
+	{                                                                                                   \
+	  load_all_partial_cases<DMA_PARTIAL_BYTES,false,                                                   \
+            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>                            \
+              (this->dma_src_off_ptr, this->dma_index_offset);                                              \
+	}                                                                                                   \
+      }                                                                                                     \
+      else if (this->dma_active_warp)                                                                       \
+      {                                                                                                     \
+        if (DMA_STEP_ITERS_FULL == 0)                                                                       \
+	{                                                                                                   \
+	  load_all_partial_cases<DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,                                        \
+            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>                            \
+              (this->dma_src_off_ptr, this->dma_index_offset);                                              \
+	}                                                                                                   \
+	else                                                                                                \
+	{                                                                                                   \
+	  load_all_partial_cases<DMA_PARTIAL_BYTES,false,                                                   \
+            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>                            \
+              (this->dma_src_off_ptr, this->dma_index_offset);                                              \
+	}                                                                                                   \
+      }                                                                                                     \
+    }                                                                                                       \
+  }                                                                                                         \
+  template<bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS,                                                   \
+           int DMA_ROW_ITERS, int DMA_COL_ITERS, bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                   \
+  __device__ __forceinline__ void load_all_partial_cases(const char *RESTRICT src_ptr,                      \
+                                                         const int index_offset)                            \
+  {                                                                                                         \
+    if (!DMA_PARTIAL_BYTES)                                                                                 \
+    {                                                                                                       \
+      if (!DMA_PARTIAL_ROWS)                                                                                \
+      {                                                                                                     \
+	load_strided<true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>          \
+			(src_ptr, index_offset, this->dma_elmt_stride,                                      \
+			 this->dma_intra_elmt_stride, 0/*no partial bytes*/);                               \
+      }                                                                                                     \
+      else                                                                                                  \
+      {                                                                                                     \
+	load_strided_upper<true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>    \
+			(src_ptr, index_offset, this->dma_elmt_stride,                                      \
+			 this->dma_intra_elmt_stride, 0/*no partial bytes*/, this->dma_partial_elmts);      \
+      }                                                                                                     \
+    }                                                                                                       \
+    else                                                                                                    \
+    {                                                                                                       \
+      if (!DMA_PARTIAL_ROWS)                                                                                \
+      {                                                                                                     \
+        load_strided<false/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>         \
+			(src_ptr, index_offset, this->dma_elmt_stride,                                      \
+			 this->dma_intra_elmt_stride, this->dma_partial_bytes);                             \
+      }                                                                                                     \
+      else                                                                                                  \
+      {                                                                                                     \
+	load_strided_upper<false/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>   \
+			(src_ptr, index_offset, this->dma_elmt_stride,                                      \
+			 this->dma_intra_elmt_stride, this->dma_partial_bytes, this->dma_partial_elmts);    \
+      }                                                                                                     \
+    }                                                                                                       \
+  }                                                                                                         \
+  template<bool DMA_ALL_ACTIVE, int DMA_ROW_ITERS, int DMA_COL_ITERS,                                       \
+           bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                                                         \
+  __device__ __forceinline__ void load_strided(const char *RESTRICT src_ptr,                                \
+  				  	       const int index_offset, const int src_elmt_stride,           \
+					       const int intra_elmt_stride, const int partial_bytes)        \
+  {                                                                                                         \
+    if (GATHER)                                                                                             \
+    {                                                                                                       \
+      const int *index_ptr = this->dma_index_ptr + index_offset;                                            \
+      for (int i = 0; i < DMA_ROW_ITERS; i++)                                                               \
+      {                                                                                                     \
+        const int offset = index_ptr[i * this->dma_index_elmt_stride];                                      \
+        const char *temp_ptr = src_ptr + (offset * BYTES_PER_ELMT);                                         \
+        for (int j = 0; j < DMA_COL_ITERS; j++)                                                             \
+        {                                                                                                   \
+          bulk_buffer[i*DMA_COL_ITERS+j] =                                                                  \
+            ptx_cudaDMA_load<LOCAL_TYPENAME, DMA_GLOBAL_LOAD, DMA_LOAD_QUAL>((LOCAL_TYPENAME*)temp_ptr);    \
+          temp_ptr += intra_elmt_stride;                                                                    \
+        }                                                                                                   \
+        if (!DMA_ALL_ACTIVE)                                                                                \
+        {                                                                                                   \
+          load_across<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(temp_ptr, partial_bytes, i);                           \
+        }                                                                                                   \
+      }                                                                                                     \
+    }                                                                                                       \
+    else                                                                                                    \
+    {                                                                                                       \
+      for (int i = 0; i < DMA_ROW_ITERS; i++)                                                               \
+      {                                                                                                     \
+        const char *temp_ptr = src_ptr + (i * src_elmt_stride);                                             \
+        for (int j = 0; j < DMA_COL_ITERS; j++)                                                             \
+        {                                                                                                   \
+          bulk_buffer[i*DMA_COL_ITERS+j] =                                                                  \
+            ptx_cudaDMA_load<LOCAL_TYPENAME, DMA_GLOBAL_LOAD, DMA_LOAD_QUAL>((LOCAL_TYPENAME*)temp_ptr);    \
+          temp_ptr += intra_elmt_stride;                                                                    \
+        }                                                                                                   \
+      }                                                                                                     \
+      if (!DMA_ALL_ACTIVE)                                                                                  \
+      {                                                                                                     \
+        load_across<DMA_ROW_ITERS,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(src_ptr+this->dma_partial_offset,          \
+                           src_elmt_stride, partial_bytes);                                                 \
+      }                                                                                                     \
+    }                                                                                                       \
+  }                                                                                                         \
+  template<bool DMA_ALL_ACTIVE, int DMA_ROW_ITERS_UPPER, int DMA_COL_ITERS,                                 \
+           bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL>                                                         \
+  __device__ __forceinline__ void load_strided_upper(const char *RESTRICT src_ptr, const int index_offset,  \
+  						const int src_elmt_stride, const int intra_elmt_stride,     \
+						const int partial_bytes, const int row_iters)               \
+  {                                                                                                         \
+    if (GATHER)                                                                                             \
+    {                                                                                                       \
+      const int *index_ptr = this->dma_index_ptr + index_offset;                                            \
+      for (int i = 0; i < row_iters; i++)                                                                   \
+      {                                                                                                     \
+        const int offset = index_ptr[i * this->dma_index_elmt_stride];                                      \
+        const char *temp_ptr = src_ptr + (offset * BYTES_PER_ELMT);                                         \
+        for (int j = 0; j < DMA_COL_ITERS; j++)                                                             \
+        {                                                                                                   \
+          bulk_buffer[i*DMA_COL_ITERS+j] =                                                                  \
+            ptx_cudaDMA_load<LOCAL_TYPENAME, DMA_GLOBAL_LOAD, DMA_LOAD_QUAL>((LOCAL_TYPENAME*)temp_ptr);    \
+          temp_ptr += intra_elmt_stride;                                                                    \
+        }                                                                                                   \
+        if (!DMA_ALL_ACTIVE)                                                                                \
+        {                                                                                                   \
+          load_across<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(temp_ptr, partial_bytes, i);                           \
+        }                                                                                                   \
+      }                                                                                                     \
+    }                                                                                                       \
+    else                                                                                                    \
+    {                                                                                                       \
+      for (int i = 0; i < row_iters; i++)                                                                   \
+      {                                                                                                     \
+        const char *temp_ptr = src_ptr + (i * src_elmt_stride);                                             \
+        for (int j = 0; j < DMA_COL_ITERS; j++)                                                             \
+        {                                                                                                   \
+          bulk_buffer[i*DMA_COL_ITERS+j] =                                                                  \
+            ptx_cudaDMA_load<LOCAL_TYPENAME, DMA_GLOBAL_LOAD, DMA_LOAD_QUAL>((LOCAL_TYPENAME*)temp_ptr);    \
+          temp_ptr += intra_elmt_stride;                                                                    \
+        }                                                                                                   \
+      }                                                                                                     \
+      if (!DMA_ALL_ACTIVE)                                                                                  \
+      {                                                                                                     \
+        load_across<DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>(src_ptr+this->dma_partial_offset,                        \
+                               src_elmt_stride, partial_bytes, row_iters);                                  \
+      }                                                                                                     \
+    }                                                                                                       \
+  }                                                                                                         \
+  template<bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL,                                     \
+           bool DMA_IS_SPLIT, bool DMA_IS_BIG,                                                              \
+           int DMA_STEP_ITERS_SPLIT, int DMA_ROW_ITERS_SPLIT, int DMA_COL_ITERS_SPLIT,                      \
+           int DMA_STEP_ITERS_BIG,   int DMA_MAX_ITERS_BIG,   int DMA_PART_ITERS_BIG,                       \
+           int DMA_STEP_ITERS_FULL,  int DMA_ROW_ITERS_FULL,  int DMA_COL_ITERS_FULL,                       \
+	   bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS, bool DMA_ALL_WARPS_ACTIVE>                        \
+  __device__ __forceinline__ void execute_wait_xfer(void *RESTRICT dst_ptr)                                 \
+  {                                                                                                         \
+    char * dst_off_ptr = ((char*)dst_ptr) + (GATHER ? this->dma_offset : this->dma_elmt_offset);            \
+    if (DMA_IS_SPLIT)                                                                                       \
+    {                                                                                                       \
+      if (DMA_STEP_ITERS_SPLIT == 0)                                                                        \
+      {                                                                                                     \
+	store_all_partial_cases<DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,                                         \
+          DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_STORE_QUAL>                                           \
+            (dst_off_ptr, this->dma_index_offset);                                                          \
+      }                                                                                                     \
+      else                                                                                                  \
+      {                                                                                                     \
+        store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                    \
+          DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_STORE_QUAL>                                           \
+            (dst_off_ptr, this->dma_index_offset);                                                          \
+        if (GATHER)                                                                                         \
+          dst_off_ptr += this->dma_step_stride;                                                             \
+        else                                                                                                \
+          this->dma_src_off_ptr += this->dma_step_stride;                                                   \
+        int target_index = this->dma_index_offset + this->dma_index_step_stride;                            \
+	for (int i = 0; i < (DMA_STEP_ITERS_SPLIT-1); i++)                                                  \
+	{                                                                                                   \
+          load_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                   \
+            DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>                          \
+              (this->dma_src_off_ptr, target_index);                                                        \
+          store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                  \
+            DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_STORE_QUAL>                                         \
+              (dst_off_ptr, target_index);                                                                  \
+          if (GATHER)                                                                                       \
+            dst_off_ptr += this->dma_step_stride;                                                           \
+          else                                                                                              \
+            this->dma_src_off_ptr += this->dma_step_stride;                                                 \
+          target_index += this->dma_index_step_stride;                                                      \
+        }                                                                                                   \
+	if (DMA_PARTIAL_ROWS)                                                                               \
+	{                                                                                                   \
+          load_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,                                    \
+            DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>                          \
+              (this->dma_src_off_ptr, target_index);                                                        \
+          store_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,                                   \
+            DMA_ROW_ITERS_SPLIT,DMA_COL_ITERS_SPLIT,DMA_STORE_QUAL>                                         \
+              (dst_off_ptr, target_index);                                                                  \
+	}                                                                                                   \
+      }                                                                                                     \
+    }                                                                                                       \
+    else if (DMA_IS_BIG)                                                                                    \
+    {                                                                                                       \
+      int target_index = this->dma_index_offset;                                                            \
+      for (int i = 0; i < DMA_STEP_ITERS_BIG; i++)                                                          \
+      {                                                                                                     \
+        perform_copy_elmt<DMA_MAX_ITERS_BIG,DMA_PART_ITERS_BIG,                                             \
+          DMA_PARTIAL_BYTES,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL,DMA_STORE_QUAL>                                   \
+            (this->dma_src_off_ptr, dst_off_ptr, this->dma_intra_elmt_stride,                               \
+             this->dma_partial_bytes, target_index);                                                        \
+        if (GATHER)                                                                                         \
+          dst_off_ptr += this->dma_elmt_stride;                                                             \
+        else                                                                                                \
+          this->dma_src_off_ptr += this->dma_elmt_stride;                                                   \
+        target_index += this->dma_index_step_stride;                                                        \
+      }                                                                                                     \
+    }                                                                                                       \
+    else                                                                                                    \
+    {                                                                                                       \
+      if (DMA_ALL_WARPS_ACTIVE)                                                                             \
+      {                                                                                                     \
+	if (DMA_STEP_ITERS_FULL == 0)                                                                       \
+	{                                                                                                   \
+	  store_all_partial_cases<DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,                                       \
+            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>                                           \
+              (dst_off_ptr, this->dma_index_offset);                                                        \
+	}                                                                                                   \
+	else                                                                                                \
+	{                                                                                                   \
+	  store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                  \
+            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>                                           \
+              (dst_off_ptr, this->dma_index_offset);                                                        \
+          if (GATHER)                                                                                       \
+            dst_off_ptr += this->dma_step_stride;                                                           \
+          else                                                                                              \
+            this->dma_src_off_ptr += this->dma_step_stride;                                                 \
+          int target_index = this->dma_index_offset + this->dma_index_step_stride;                          \
+	  for (int i = 0; i < (DMA_STEP_ITERS_FULL-1); i++)                                                 \
+	  {                                                                                                 \
+            load_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                 \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>                          \
+                (this->dma_src_off_ptr, target_index);                                                      \
+            store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>                                         \
+                (dst_off_ptr, target_index);                                                                \
+            if (GATHER)                                                                                     \
+              dst_off_ptr += this->dma_step_stride;                                                         \
+            else                                                                                            \
+              this->dma_src_off_ptr += this->dma_step_stride;                                               \
+            target_index += this->dma_index_step_stride;                                                    \
+	  }                                                                                                 \
+	  if (DMA_PARTIAL_ROWS)                                                                             \
+	  {                                                                                                 \
+            load_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,                                  \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>                          \
+                (this->dma_src_off_ptr, target_index);                                                      \
+            store_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,                                 \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>                                         \
+                (dst_off_ptr, target_index);                                                                \
+	  }                                                                                                 \
+	}                                                                                                   \
+      }                                                                                                     \
+      else if (this->dma_active_warp)                                                                       \
+      {                                                                                                     \
+        if (DMA_STEP_ITERS_FULL == 0)                                                                       \
+	{                                                                                                   \
+	  store_all_partial_cases<DMA_PARTIAL_BYTES,DMA_PARTIAL_ROWS,                                       \
+            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>                                           \
+              (dst_off_ptr, this->dma_index_offset);                                                        \
+	}                                                                                                   \
+	else                                                                                                \
+	{                                                                                                   \
+	  store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                  \
+            DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>                                           \
+              (dst_off_ptr, this->dma_index_offset);                                                        \
+          if (GATHER)                                                                                       \
+            dst_off_ptr += this->dma_step_stride;                                                           \
+          else                                                                                              \
+            this->dma_src_off_ptr += this->dma_step_stride;                                                 \
+          unsigned int target_index = this->dma_index_offset + this->dma_index_step_stride;                 \
+	  for (int i = 0; i < (DMA_STEP_ITERS_FULL-1); i++)                                                 \
+	  {                                                                                                 \
+            load_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                 \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>                          \
+                (this->dma_src_off_ptr, target_index);                                                      \
+            store_all_partial_cases<DMA_PARTIAL_BYTES,false/*partial rows*/,                                \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>                                         \
+                (dst_off_ptr, target_index);                                                                \
+            if (GATHER)                                                                                     \
+              dst_off_ptr += this->dma_step_stride;                                                         \
+            else                                                                                            \
+              this->dma_src_off_ptr += this->dma_step_stride;                                               \
+            target_index += this->dma_index_step_stride;                                                    \
+	  }                                                                                                 \
+	  if (DMA_PARTIAL_ROWS)                                                                             \
+	  {                                                                                                 \
+            load_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,                                  \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>                          \
+                (this->dma_src_off_ptr, target_index);                                                      \
+            store_all_partial_cases<DMA_PARTIAL_BYTES,true/*partial rows*/,                                 \
+              DMA_ROW_ITERS_FULL,DMA_COL_ITERS_FULL,DMA_STORE_QUAL>                                         \
+                (dst_off_ptr, target_index);                                                                \
+	  }                                                                                                 \
+	}                                                                                                   \
+      }                                                                                                     \
+    }                                                                                                       \
+  }                                                                                                         \
+  template<bool DMA_PARTIAL_BYTES, bool DMA_PARTIAL_ROWS,                                                   \
+  	   int DMA_ROW_ITERS, int DMA_COL_ITERS, int DMA_STORE_QUAL>                                        \
+  __device__ __forceinline__ void store_all_partial_cases(char *RESTRICT dst_ptr,                           \
+                                                          const int index_offset)                           \
+  {                                                                                                         \
+    if (!DMA_PARTIAL_BYTES)                                                                                 \
+    {                                                                                                       \
+      if (!DMA_PARTIAL_ROWS)                                                                                \
+      {                                                                                                     \
+	store_strided<true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_STORE_QUAL>                        \
+			(dst_ptr, index_offset, this->dma_elmt_stride,                                      \
+			 this->dma_intra_elmt_stride, 0/*no partial bytes*/);                               \
+      }                                                                                                     \
+      else                                                                                                  \
+      {                                                                                                     \
+	store_strided_upper<true/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_STORE_QUAL>                  \
+			(dst_ptr, index_offset, this->dma_elmt_stride,                                      \
+			 this->dma_intra_elmt_stride, 0/*no partial bytes*/, this->dma_partial_elmts);      \
+      }                                                                                                     \
+    }                                                                                                       \
+    else                                                                                                    \
+    {                                                                                                       \
+      if (!DMA_PARTIAL_ROWS)                                                                                \
+      {                                                                                                     \
+	store_strided<false/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_STORE_QUAL>                       \
+			(dst_ptr, index_offset, this->dma_elmt_stride,                                      \
+			 this->dma_intra_elmt_stride, this->dma_partial_bytes);                             \
+      }                                                                                                     \
+      else                                                                                                  \
+      {                                                                                                     \
+	store_strided_upper<false/*all active*/,DMA_ROW_ITERS,DMA_COL_ITERS,DMA_STORE_QUAL>                 \
+			(dst_ptr, index_offset, this->dma_elmt_stride,                                      \
+			 this->dma_intra_elmt_stride, this->dma_partial_bytes, this->dma_partial_elmts);    \
+      }                                                                                                     \
+    }                                                                                                       \
+  }                                                                                                         \
+  template<bool DMA_ALL_ACTIVE, int DMA_ROW_ITERS, int DMA_COL_ITERS, int DMA_STORE_QUAL>                   \
+  __device__ __forceinline__ void store_strided(char *RESTRICT dst_ptr, const unsigned int index_offset,    \
+                                                const int dst_elmt_stride,                                  \
+  						const int intra_elmt_stride, const int partial_bytes)       \
+  {                                                                                                         \
+    if (GATHER)                                                                                             \
+    {                                                                                                       \
+      for (int i = 0; i < DMA_ROW_ITERS; i++)                                                               \
+      {                                                                                                     \
+        char *temp_ptr = dst_ptr + (i * dst_elmt_stride);                                                   \
+        for (int j = 0; j < DMA_COL_ITERS; j++)                                                             \
+        {                                                                                                   \
+          ptx_cudaDMA_store<LOCAL_TYPENAME, DMA_STORE_QUAL>                                                 \
+            (bulk_buffer[i*DMA_COL_ITERS+j], (LOCAL_TYPENAME*)temp_ptr);                                    \
+          temp_ptr += intra_elmt_stride;                                                                    \
+        }                                                                                                   \
+      }                                                                                                     \
+      if (!DMA_ALL_ACTIVE)                                                                                  \
+      {                                                                                                     \
+        store_across<DMA_ROW_ITERS,DMA_STORE_QUAL>(dst_ptr+this->dma_partial_offset,                        \
+                                dst_elmt_stride,partial_bytes);                                             \
+      }                                                                                                     \
+    }                                                                                                       \
+    else                                                                                                    \
+    {                                                                                                       \
+      const int *index_ptr = this->dma_index_ptr + index_offset;                                            \
+      for (int i = 0; i < DMA_ROW_ITERS; i++)                                                               \
+      {                                                                                                     \
+        const int offset = index_ptr[i * this->dma_index_elmt_stride];                                      \
+        char *temp_ptr = dst_ptr + (offset * BYTES_PER_ELMT);                                               \
+        for (int j = 0; j < DMA_COL_ITERS; j++)                                                             \
+        {                                                                                                   \
+          ptx_cudaDMA_store<LOCAL_TYPENAME, DMA_STORE_QUAL>                                                 \
+            (bulk_buffer[i*DMA_COL_ITERS+j], (LOCAL_TYPENAME*)temp_ptr);                                    \
+          temp_ptr += intra_elmt_stride;                                                                    \
+        }                                                                                                   \
+        if (!DMA_ALL_ACTIVE)                                                                                \
+        {                                                                                                   \
+          store_across<DMA_STORE_QUAL>(temp_ptr, partial_bytes, i);                                         \
+        }                                                                                                   \
+      }                                                                                                     \
+    }                                                                                                       \
+  }                                                                                                         \
+  template<bool DMA_ALL_ACTIVE, int DMA_ROW_ITERS_UPPER, int DMA_COL_ITERS, int DMA_STORE_QUAL>             \
+  __device__ __forceinline__ void store_strided_upper(char *RESTRICT dst_ptr,                               \
+                                                      const unsigned int index_offset,                      \
+                                                      const int dst_elmt_stride,                            \
+  						      const int intra_elmt_stride, const int partial_bytes, \
+						      const int row_iters)                                  \
+  {                                                                                                         \
+    if (GATHER)                                                                                             \
+    {                                                                                                       \
+      for (int i = 0; i < row_iters; i++)                                                                   \
+      {                                                                                                     \
+        char *temp_ptr = dst_ptr + (i * dst_elmt_stride);                                                   \
+        for (int j = 0; j < DMA_COL_ITERS; j++)                                                             \
+        {                                                                                                   \
+          ptx_cudaDMA_store<LOCAL_TYPENAME, DMA_STORE_QUAL>                                                 \
+            (bulk_buffer[i*DMA_COL_ITERS+j], (LOCAL_TYPENAME*)temp_ptr);                                    \
+          temp_ptr += intra_elmt_stride;                                                                    \
+        }                                                                                                   \
+      }                                                                                                     \
+      if (!DMA_ALL_ACTIVE)                                                                                  \
+      {                                                                                                     \
+        store_across<DMA_STORE_QUAL>(dst_ptr+this->dma_partial_offset,                                      \
+                                dst_elmt_stride,partial_bytes,row_iters);                                   \
+      }                                                                                                     \
+    }                                                                                                       \
+    else                                                                                                    \
+    {                                                                                                       \
+      const int *index_ptr = this->dma_index_ptr + index_offset;                                            \
+      for (int i = 0; i < row_iters; i++)                                                                   \
+      {                                                                                                     \
+        const int offset = index_ptr[i * this->dma_index_elmt_stride];                                      \
+        char *temp_ptr = dst_ptr + (offset * BYTES_PER_ELMT);                                               \
+        for (int j = 0; j < DMA_COL_ITERS; j++)                                                             \
+        {                                                                                                   \
+          ptx_cudaDMA_store<LOCAL_TYPENAME, DMA_STORE_QUAL>                                                 \
+            (bulk_buffer[i*DMA_COL_ITERS+j], (LOCAL_TYPENAME*)temp_ptr);                                    \
+          temp_ptr += intra_elmt_stride;                                                                    \
+        }                                                                                                   \
+        if (!DMA_ALL_ACTIVE)                                                                                \
+        {                                                                                                   \
+          store_across<DMA_STORE_QUAL>(temp_ptr, partial_bytes, i);                                         \
+        }                                                                                                   \
+      }                                                                                                     \
+    }                                                                                                       \
+  }
+
+#define LOCAL_TYPENAME float
+#define ALIGNMENT 4
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
+class CudaDMAIndirect<GATHER,true,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int dmaID,
+                             const int num_compute_threads,
+                             const int dma_threadIdx_start,
+                             const int alternate_stride = 0)
+    : CudaDMA(dmaID, DMA_THREADS, num_compute_threads, dma_threadIdx_start),
+      dma_index_offset(INIT_INDEX_OFFSET),
+      dma_index_step_stride(INIT_INDEX_STEP_STRIDE),
+      dma_index_elmt_stride(INIT_INDEX_ELMT_STRIDE),
+      dma_elmt_offset(INIT_INDIRECT_ELMT_OFFSET),
+      dma_offset(INIT_INDIRECT_OFFSET(SELECT_STRIDE(alternate_stride))),
+      dma_step_stride(INIT_INDIRECT_STEP_STRIDE(SELECT_STRIDE(alternate_stride))),
+      dma_elmt_stride(INIT_INDIRECT_ELMT_STRIDE(SELECT_STRIDE(alternate_stride))),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  WARP_SPECIALIZED_UNQUALIFIED_METHODS
+  WARP_SPECIALIZED_QUALIFIED_METHODS
+private:
+  TEMPLATE_FOUR_IMPL
+private:
+  template<int DMA_MAX_ITERS, int DMA_PARTIAL_ITERS, bool DMA_PARTIAL_BYTES,
+           bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void perform_copy_elmt(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, 
+                                                    const int intra_elmt_stride, const int partial_bytes,
+                                                    const int index_offset)
+  {
+    if (GATHER)
+    {
+      const int offset = this->dma_index_ptr[index_offset];
+      src_ptr += (offset * BYTES_PER_ELMT);
+    }
+    else
+    {
+      const int offset = this->dma_index_ptr[index_offset];
+      dst_ptr += (offset * BYTES_PER_ELMT);
+    }
+    for (int i = 0; i < DMA_MAX_ITERS; i++)
+    {
+      for (int j = 0; j < (BYTES_PER_THREAD/ALIGNMENT); j++)
+      {
+        bulk_buffer[j] = ptx_cudaDMA_load<LOCAL_TYPENAME,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((LOCAL_TYPENAME*)src_ptr);
+        src_ptr += intra_elmt_stride;
+      }
+      for (int j = 0; j < (BYTES_PER_THREAD/ALIGNMENT); j++)
+      {
+        ptx_cudaDMA_store<LOCAL_TYPENAME,DMA_STORE_QUAL>(bulk_buffer[j], (LOCAL_TYPENAME*)dst_ptr);
+        dst_ptr += intra_elmt_stride;
+      }
+    }
+    if (DMA_PARTIAL_ITERS > 0)
+    {
+      for (int i = 0; i < DMA_PARTIAL_ITERS; i++)
+      {
+        bulk_buffer[i] = ptx_cudaDMA_load<LOCAL_TYPENAME,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((LOCAL_TYPENAME*)src_ptr);
+        src_ptr += intra_elmt_stride;
+      }
+      for (int i = 0; i < DMA_PARTIAL_ITERS; i++)
+      {
+        ptx_cudaDMA_store<LOCAL_TYPENAME,DMA_STORE_QUAL>(bulk_buffer[i], (LOCAL_TYPENAME*)dst_ptr);
+        dst_ptr += intra_elmt_stride;
+      }
+    }
+    if (DMA_PARTIAL_BYTES)
+    {
+      switch (partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          {
+            float tmp = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);
+            ptx_cudaDMA_store<float,DMA_STORE_QUAL>(tmp, (float*)dst_ptr);
+            break;
+          }
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  LOAD_4_PARTIAL_BYTES_IMPL
+  STORE_4_PARTIAL_BYTES_IMPL
+private:
+  const char *dma_src_off_ptr;
+  const int *dma_index_ptr;
+  const unsigned int dma_index_offset;
+  const unsigned int dma_index_step_stride;
+  const unsigned int dma_index_elmt_stride;
+  const unsigned int dma_elmt_offset;
+  const unsigned int dma_offset;
+  const unsigned int dma_step_stride;
+  const unsigned int dma_elmt_stride;
+  const unsigned int dma_intra_elmt_stride;
+  const unsigned int dma_partial_bytes;
+  const unsigned int dma_partial_offset;
+  const unsigned int dma_partial_elmts;
+  const bool         dma_active_warp;
+  LOCAL_TYPENAME bulk_buffer[BYTES_PER_THREAD/ALIGNMENT];
+  LOCAL_TYPENAME across_buffer[GUARD_ZERO(SPLIT_WARP ? ROW_ITERS_SPLIT : 
+  				BIG_ELMTS ? 1 : ROW_ITERS_FULL)*ALIGNMENT/sizeof(LOCAL_TYPENAME)];
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float2
+#define ALIGNMENT 8
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
+class CudaDMAIndirect<GATHER,true,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int dmaID,
+                             const int num_compute_threads,
+                             const int dma_threadIdx_start,
+                             const int alternate_stride = 0)
+    : CudaDMA(dmaID, DMA_THREADS, num_compute_threads, dma_threadIdx_start),
+      dma_index_offset(INIT_INDEX_OFFSET),
+      dma_index_step_stride(INIT_INDEX_STEP_STRIDE),
+      dma_index_elmt_stride(INIT_INDEX_ELMT_STRIDE),
+      dma_elmt_offset(INIT_INDIRECT_ELMT_OFFSET),
+      dma_offset(INIT_INDIRECT_OFFSET(SELECT_STRIDE(alternate_stride))),
+      dma_step_stride(INIT_INDIRECT_STEP_STRIDE(SELECT_STRIDE(alternate_stride))),
+      dma_elmt_stride(INIT_INDIRECT_ELMT_STRIDE(SELECT_STRIDE(alternate_stride))),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  WARP_SPECIALIZED_UNQUALIFIED_METHODS
+  WARP_SPECIALIZED_QUALIFIED_METHODS
+private:
+  TEMPLATE_FOUR_IMPL
+private:
+  template<int DMA_MAX_ITERS, int DMA_PARTIAL_ITERS, bool DMA_PARTIAL_BYTES,
+           bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void perform_copy_elmt(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, 
+                                                    const int intra_elmt_stride, const int partial_bytes,
+                                                    const int index_offset)
+  {
+    if (GATHER)
+    {
+      const int offset = this->dma_index_ptr[index_offset];
+      src_ptr += (offset * BYTES_PER_ELMT);
+    }
+    else
+    {
+      const int offset = this->dma_index_ptr[index_offset];
+      dst_ptr += (offset * BYTES_PER_ELMT);
+    }
+    for (int i = 0; i < DMA_MAX_ITERS; i++)
+    {
+      for (int j = 0; j < (BYTES_PER_THREAD/ALIGNMENT); j++)
+      {
+        bulk_buffer[j] = ptx_cudaDMA_load<LOCAL_TYPENAME,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((LOCAL_TYPENAME*)src_ptr);
+        src_ptr += intra_elmt_stride;
+      }
+      for (int j = 0; j < (BYTES_PER_THREAD/ALIGNMENT); j++)
+      {
+        ptx_cudaDMA_store<LOCAL_TYPENAME,DMA_STORE_QUAL>(bulk_buffer[j], (LOCAL_TYPENAME*)dst_ptr);
+        dst_ptr += intra_elmt_stride;
+      }
+    }
+    if (DMA_PARTIAL_ITERS > 0)
+    {
+      for (int i = 0; i < DMA_PARTIAL_ITERS; i++)
+      {
+        bulk_buffer[i] = ptx_cudaDMA_load<LOCAL_TYPENAME,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((LOCAL_TYPENAME*)src_ptr);
+        src_ptr += intra_elmt_stride;
+      }
+      for (int i = 0; i < DMA_PARTIAL_ITERS; i++)
+      {
+        ptx_cudaDMA_store<LOCAL_TYPENAME,DMA_STORE_QUAL>(bulk_buffer[i], (LOCAL_TYPENAME*)dst_ptr);
+        dst_ptr += intra_elmt_stride;
+      }
+    }
+    if (DMA_PARTIAL_BYTES)
+    {
+      switch (partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          {
+            float tmp = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);
+            ptx_cudaDMA_store<float,DMA_STORE_QUAL>(tmp, (float*)dst_ptr);
+            break;
+          }
+        case 8:
+          {
+            float2 tmp = ptx_cudaDMA_load<float2,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)src_ptr);
+            ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(tmp, (float2*)dst_ptr);
+            break;
+          }
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  LOAD_8_PARTIAL_BYTES_IMPL
+  STORE_8_PARTIAL_BYTES_IMPL
+private:
+  const char *dma_src_off_ptr;
+  const int *dma_index_ptr;
+  const unsigned int dma_index_offset;
+  const unsigned int dma_index_step_stride;
+  const unsigned int dma_index_elmt_stride;
+  const unsigned int dma_elmt_offset;
+  const unsigned int dma_offset;
+  const unsigned int dma_step_stride;
+  const unsigned int dma_elmt_stride;
+  const unsigned int dma_intra_elmt_stride;
+  const unsigned int dma_partial_bytes;
+  const unsigned int dma_partial_offset;
+  const unsigned int dma_partial_elmts;
+  const bool         dma_active_warp;
+  LOCAL_TYPENAME bulk_buffer[BYTES_PER_THREAD/ALIGNMENT];
+  LOCAL_TYPENAME across_buffer[GUARD_ZERO(SPLIT_WARP ? ROW_ITERS_SPLIT : 
+  				BIG_ELMTS ? 1 : ROW_ITERS_FULL)*ALIGNMENT/sizeof(LOCAL_TYPENAME)];
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float4
+#define ALIGNMENT 16 
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
+class CudaDMAIndirect<GATHER,true,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int dmaID,
+                             const int num_compute_threads,
+                             const int dma_threadIdx_start,
+                             const int alternate_stride = 0)
+    : CudaDMA(dmaID, DMA_THREADS, num_compute_threads, dma_threadIdx_start),
+      dma_index_offset(INIT_INDEX_OFFSET),
+      dma_index_step_stride(INIT_INDEX_STEP_STRIDE),
+      dma_index_elmt_stride(INIT_INDEX_ELMT_STRIDE),
+      dma_elmt_offset(INIT_INDIRECT_ELMT_OFFSET),
+      dma_offset(INIT_INDIRECT_OFFSET(SELECT_STRIDE(alternate_stride))),
+      dma_step_stride(INIT_INDIRECT_STEP_STRIDE(SELECT_STRIDE(alternate_stride))),
+      dma_elmt_stride(INIT_INDIRECT_ELMT_STRIDE(SELECT_STRIDE(alternate_stride))),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  WARP_SPECIALIZED_UNQUALIFIED_METHODS
+  WARP_SPECIALIZED_QUALIFIED_METHODS
+private:
+  TEMPLATE_FOUR_IMPL
+private:
+  template<int DMA_MAX_ITERS, int DMA_PARTIAL_ITERS, bool DMA_PARTIAL_BYTES,
+           bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void perform_copy_elmt(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, 
+                                                    const int intra_elmt_stride, const int partial_bytes,
+                                                    const int index_offset)
+  {
+    if (GATHER)
+    {
+      const int offset = this->dma_index_ptr[index_offset];
+      src_ptr += (offset * BYTES_PER_ELMT);
+    }
+    else
+    {
+      const int offset = this->dma_index_ptr[index_offset];
+      dst_ptr += (offset * BYTES_PER_ELMT);
+    }
+    for (int i = 0; i < DMA_MAX_ITERS; i++)
+    {
+      for (int j = 0; j < (BYTES_PER_THREAD/ALIGNMENT); j++)
+      {
+        bulk_buffer[j] = ptx_cudaDMA_load<LOCAL_TYPENAME,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((LOCAL_TYPENAME*)src_ptr);
+        src_ptr += intra_elmt_stride;
+      }
+      for (int j = 0; j < (BYTES_PER_THREAD/ALIGNMENT); j++)
+      {
+        ptx_cudaDMA_store<LOCAL_TYPENAME,DMA_STORE_QUAL>(bulk_buffer[j], (LOCAL_TYPENAME*)dst_ptr);
+        dst_ptr += intra_elmt_stride;
+      }
+    }
+    if (DMA_PARTIAL_ITERS > 0)
+    {
+      for (int i = 0; i < DMA_PARTIAL_ITERS; i++)
+      {
+        bulk_buffer[i] = ptx_cudaDMA_load<LOCAL_TYPENAME,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((LOCAL_TYPENAME*)src_ptr);
+        src_ptr += intra_elmt_stride;
+      }
+      for (int i = 0; i < DMA_PARTIAL_ITERS; i++)
+      {
+        ptx_cudaDMA_store<LOCAL_TYPENAME,DMA_STORE_QUAL>(bulk_buffer[i], (LOCAL_TYPENAME*)dst_ptr);
+        dst_ptr += intra_elmt_stride;
+      }
+    }
+    if (DMA_PARTIAL_BYTES)
+    {
+      switch (partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          {
+            float tmp = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);
+            ptx_cudaDMA_store<float,DMA_STORE_QUAL>(tmp, (float*)dst_ptr);
+            break;
+          }
+        case 8:
+          {
+            float2 tmp = ptx_cudaDMA_load<float2,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)src_ptr);
+            ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(tmp, (float2*)dst_ptr);
+            break;
+          }
+        case 12:
+          {
+            float3 tmp = ptx_cudaDMA_load<float3,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float3*)src_ptr);
+            ptx_cudaDMA_store<float3,DMA_STORE_QUAL>(tmp, (float3*)dst_ptr);
+            break;
+          }
+        case 16:
+          {
+            float4 tmp = ptx_cudaDMA_load<float4,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float4*)src_ptr);
+            ptx_cudaDMA_store<float4,DMA_STORE_QUAL>(tmp, (float4*)dst_ptr);
+            break;
+          }
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  LOAD_16_PARTIAL_BYTES_IMPL
+  STORE_16_PARTIAL_BYTES_IMPL
+private:
+  const char *dma_src_off_ptr;
+  const int *dma_index_ptr;
+  const unsigned int dma_index_offset;
+  const unsigned int dma_index_step_stride;
+  const unsigned int dma_index_elmt_stride;
+  const unsigned int dma_elmt_offset;
+  const unsigned int dma_offset;
+  const unsigned int dma_step_stride;
+  const unsigned int dma_elmt_stride;
+  const unsigned int dma_intra_elmt_stride;
+  const unsigned int dma_partial_bytes;
+  const unsigned int dma_partial_offset;
+  const unsigned int dma_partial_elmts;
+  const bool         dma_active_warp;
+  LOCAL_TYPENAME bulk_buffer[BYTES_PER_THREAD/ALIGNMENT];
+  LOCAL_TYPENAME across_buffer[GUARD_ZERO(SPLIT_WARP ? ROW_ITERS_SPLIT : 
+  				BIG_ELMTS ? 1 : ROW_ITERS_FULL)*ALIGNMENT/sizeof(LOCAL_TYPENAME)];
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+// four template, non-warp-specialized
+#define LOCAL_TYPENAME float
+#define ALIGNMENT 4
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
+class CudaDMAIndirect<GATHER,false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int alternate_stride = 0,
+                             const int dma_threadIdx_start = 0)
+    : CudaDMA(0, DMA_THREADS, DMA_THREADS, dma_threadIdx_start),
+      dma_index_offset(INIT_INDEX_OFFSET),
+      dma_index_step_stride(INIT_INDEX_STEP_STRIDE),
+      dma_index_elmt_stride(INIT_INDEX_ELMT_STRIDE),
+      dma_elmt_offset(INIT_INDIRECT_ELMT_OFFSET),
+      dma_offset(INIT_INDIRECT_OFFSET(SELECT_STRIDE(alternate_stride))),
+      dma_step_stride(INIT_INDIRECT_STEP_STRIDE(SELECT_STRIDE(alternate_stride))),
+      dma_elmt_stride(INIT_INDIRECT_ELMT_STRIDE(SELECT_STRIDE(alternate_stride))),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  NON_WARP_SPECIALIZED_UNQUALIFIED_METHODS
+  NON_WARP_SPECIALIZED_QUALIFIED_METHODS
+private:
+  TEMPLATE_FOUR_IMPL
+private:
+  template<int DMA_MAX_ITERS, int DMA_PARTIAL_ITERS, bool DMA_PARTIAL_BYTES,
+           bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void perform_copy_elmt(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, 
+                                                    const int intra_elmt_stride, const int partial_bytes,
+                                                    const int index_offset)
+  {
+    if (GATHER)
+    {
+      const int offset = this->dma_index_ptr[index_offset];
+      src_ptr += (offset * BYTES_PER_ELMT);
+    }
+    else
+    {
+      const int offset = this->dma_index_ptr[index_offset];
+      dst_ptr += (offset * BYTES_PER_ELMT);
+    }
+    for (int i = 0; i < DMA_MAX_ITERS; i++)
+    {
+      for (int j = 0; j < (BYTES_PER_THREAD/ALIGNMENT); j++)
+      {
+        bulk_buffer[j] = ptx_cudaDMA_load<LOCAL_TYPENAME,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((LOCAL_TYPENAME*)src_ptr);
+        src_ptr += intra_elmt_stride;
+      }
+      for (int j = 0; j < (BYTES_PER_THREAD/ALIGNMENT); j++)
+      {
+        ptx_cudaDMA_store<LOCAL_TYPENAME,DMA_STORE_QUAL>(bulk_buffer[j], (LOCAL_TYPENAME*)dst_ptr);
+        dst_ptr += intra_elmt_stride;
+      }
+    }
+    if (DMA_PARTIAL_ITERS > 0)
+    {
+      for (int i = 0; i < DMA_PARTIAL_ITERS; i++)
+      {
+        bulk_buffer[i] = ptx_cudaDMA_load<LOCAL_TYPENAME,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((LOCAL_TYPENAME*)src_ptr);
+        src_ptr += intra_elmt_stride;
+      }
+      for (int i = 0; i < DMA_PARTIAL_ITERS; i++)
+      {
+        ptx_cudaDMA_store<LOCAL_TYPENAME,DMA_STORE_QUAL>(bulk_buffer[i], (LOCAL_TYPENAME*)dst_ptr);
+        dst_ptr += intra_elmt_stride;
+      }
+    }
+    if (DMA_PARTIAL_BYTES)
+    {
+      switch (partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          {
+            float tmp = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);
+            ptx_cudaDMA_store<float,DMA_STORE_QUAL>(tmp, (float*)dst_ptr);
+            break;
+          }
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  LOAD_4_PARTIAL_BYTES_IMPL
+  STORE_4_PARTIAL_BYTES_IMPL
+private:
+  const char *dma_src_off_ptr;
+  const int *dma_index_ptr;
+  const unsigned int dma_index_offset;
+  const unsigned int dma_index_step_stride;
+  const unsigned int dma_index_elmt_stride;
+  const unsigned int dma_elmt_offset;
+  const unsigned int dma_offset;
+  const unsigned int dma_step_stride;
+  const unsigned int dma_elmt_stride;
+  const unsigned int dma_intra_elmt_stride;
+  const unsigned int dma_partial_bytes;
+  const unsigned int dma_partial_offset;
+  const unsigned int dma_partial_elmts;
+  const bool         dma_active_warp;
+  LOCAL_TYPENAME bulk_buffer[BYTES_PER_THREAD/ALIGNMENT];
+  LOCAL_TYPENAME across_buffer[GUARD_ZERO(SPLIT_WARP ? ROW_ITERS_SPLIT : 
+  				BIG_ELMTS ? 1 : ROW_ITERS_FULL)*ALIGNMENT/sizeof(LOCAL_TYPENAME)];
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float2
+#define ALIGNMENT 8
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
+class CudaDMAIndirect<GATHER,false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int alternate_stride = 0,
+                             const int dma_threadIdx_start = 0)
+    : CudaDMA(0, DMA_THREADS, DMA_THREADS, dma_threadIdx_start),
+      dma_index_offset(INIT_INDEX_OFFSET),
+      dma_index_step_stride(INIT_INDEX_STEP_STRIDE),
+      dma_index_elmt_stride(INIT_INDEX_ELMT_STRIDE),
+      dma_elmt_offset(INIT_INDIRECT_ELMT_OFFSET),
+      dma_offset(INIT_INDIRECT_OFFSET(SELECT_STRIDE(alternate_stride))),
+      dma_step_stride(INIT_INDIRECT_STEP_STRIDE(SELECT_STRIDE(alternate_stride))),
+      dma_elmt_stride(INIT_INDIRECT_ELMT_STRIDE(SELECT_STRIDE(alternate_stride))),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  NON_WARP_SPECIALIZED_UNQUALIFIED_METHODS
+  NON_WARP_SPECIALIZED_QUALIFIED_METHODS
+private:
+  TEMPLATE_FOUR_IMPL
+private:
+  template<int DMA_MAX_ITERS, int DMA_PARTIAL_ITERS, bool DMA_PARTIAL_BYTES,
+           bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void perform_copy_elmt(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, 
+                                                    const int intra_elmt_stride, const int partial_bytes,
+                                                    const int index_offset)
+  {
+    if (GATHER)
+    {
+      const int offset = this->dma_index_ptr[index_offset];
+      src_ptr += (offset * BYTES_PER_ELMT);
+    }
+    else
+    {
+      const int offset = this->dma_index_ptr[index_offset];
+      dst_ptr += (offset * BYTES_PER_ELMT);
+    }
+    for (int i = 0; i < DMA_MAX_ITERS; i++)
+    {
+      for (int j = 0; j < (BYTES_PER_THREAD/ALIGNMENT); j++)
+      {
+        bulk_buffer[j] = ptx_cudaDMA_load<LOCAL_TYPENAME,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((LOCAL_TYPENAME*)src_ptr);
+        src_ptr += intra_elmt_stride;
+      }
+      for (int j = 0; j < (BYTES_PER_THREAD/ALIGNMENT); j++)
+      {
+        ptx_cudaDMA_store<LOCAL_TYPENAME,DMA_STORE_QUAL>(bulk_buffer[j], (LOCAL_TYPENAME*)dst_ptr);
+        dst_ptr += intra_elmt_stride;
+      }
+    }
+    if (DMA_PARTIAL_ITERS > 0)
+    {
+      for (int i = 0; i < DMA_PARTIAL_ITERS; i++)
+      {
+        bulk_buffer[i] = ptx_cudaDMA_load<LOCAL_TYPENAME,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((LOCAL_TYPENAME*)src_ptr);
+        src_ptr += intra_elmt_stride;
+      }
+      for (int i = 0; i < DMA_PARTIAL_ITERS; i++)
+      {
+        ptx_cudaDMA_store<LOCAL_TYPENAME,DMA_STORE_QUAL>(bulk_buffer[i], (LOCAL_TYPENAME*)dst_ptr);
+        dst_ptr += intra_elmt_stride;
+      }
+    }
+    if (DMA_PARTIAL_BYTES)
+    {
+      switch (partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          {
+            float tmp = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);
+            ptx_cudaDMA_store<float,DMA_STORE_QUAL>(tmp, (float*)dst_ptr);
+            break;
+          }
+        case 8:
+          {
+            float2 tmp = ptx_cudaDMA_load<float2,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)src_ptr);
+            ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(tmp, (float2*)dst_ptr);
+            break;
+          }
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  LOAD_8_PARTIAL_BYTES_IMPL
+  STORE_8_PARTIAL_BYTES_IMPL
+private:
+  const char *dma_src_off_ptr;
+  const int *dma_index_ptr;
+  const unsigned int dma_index_offset;
+  const unsigned int dma_index_step_stride;
+  const unsigned int dma_index_elmt_stride;
+  const unsigned int dma_elmt_offset;
+  const unsigned int dma_offset;
+  const unsigned int dma_step_stride;
+  const unsigned int dma_elmt_stride;
+  const unsigned int dma_intra_elmt_stride;
+  const unsigned int dma_partial_bytes;
+  const unsigned int dma_partial_offset;
+  const unsigned int dma_partial_elmts;
+  const bool         dma_active_warp;
+  LOCAL_TYPENAME bulk_buffer[BYTES_PER_THREAD/ALIGNMENT];
+  LOCAL_TYPENAME across_buffer[GUARD_ZERO(SPLIT_WARP ? ROW_ITERS_SPLIT : 
+  				BIG_ELMTS ? 1 : ROW_ITERS_FULL)*ALIGNMENT/sizeof(LOCAL_TYPENAME)];
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#define LOCAL_TYPENAME float4
+#define ALIGNMENT 16 
+template<bool GATHER, int BYTES_PER_THREAD, int BYTES_PER_ELMT, int DMA_THREADS, int NUM_ELMTS>
+class CudaDMAIndirect<GATHER,false,ALIGNMENT,BYTES_PER_THREAD,BYTES_PER_ELMT,DMA_THREADS,NUM_ELMTS> : public CudaDMA {
+public:
+  __device__ CudaDMAIndirect(const int alternate_stride = 0,
+                             const int dma_threadIdx_start = 0)
+    : CudaDMA(0, DMA_THREADS, DMA_THREADS, dma_threadIdx_start),
+      dma_index_offset(INIT_INDEX_OFFSET),
+      dma_index_step_stride(INIT_INDEX_STEP_STRIDE),
+      dma_index_elmt_stride(INIT_INDEX_ELMT_STRIDE),
+      dma_elmt_offset(INIT_INDIRECT_ELMT_OFFSET),
+      dma_offset(INIT_INDIRECT_OFFSET(SELECT_STRIDE(alternate_stride))),
+      dma_step_stride(INIT_INDIRECT_STEP_STRIDE(SELECT_STRIDE(alternate_stride))),
+      dma_elmt_stride(INIT_INDIRECT_ELMT_STRIDE(SELECT_STRIDE(alternate_stride))),
+      dma_intra_elmt_stride(INIT_INTRA_ELMT_STRIDE),
+      dma_partial_bytes(INIT_PARTIAL_BYTES),
+      dma_partial_offset(INIT_PARTIAL_OFFSET),
+      dma_partial_elmts(INIT_PARTIAL_ELMTS),
+      dma_active_warp(INIT_ACTIVE_WARP)
+  {
+    STATIC_ASSERT((BYTES_PER_THREAD/ALIGNMENT) > 0);
+    STATIC_ASSERT((BYTES_PER_THREAD%ALIGNMENT) == 0);
+  }
+public:
+  NON_WARP_SPECIALIZED_UNQUALIFIED_METHODS
+  NON_WARP_SPECIALIZED_QUALIFIED_METHODS
+private:
+  TEMPLATE_FOUR_IMPL
+private:
+  template<int DMA_MAX_ITERS, int DMA_PARTIAL_ITERS, bool DMA_PARTIAL_BYTES,
+           bool DMA_GLOBAL_LOAD, int DMA_LOAD_QUAL, int DMA_STORE_QUAL>
+  __device__ __forceinline__ void perform_copy_elmt(const char *RESTRICT src_ptr, char *RESTRICT dst_ptr, 
+                                                    const int intra_elmt_stride, const int partial_bytes,
+                                                    const int index_offset)
+  {
+    if (GATHER)
+    {
+      const int offset = this->dma_index_ptr[index_offset];
+      src_ptr += (offset * BYTES_PER_ELMT);
+    }
+    else
+    {
+      const int offset = this->dma_index_ptr[index_offset];
+      dst_ptr += (offset * BYTES_PER_ELMT);
+    }
+    for (int i = 0; i < DMA_MAX_ITERS; i++)
+    {
+      for (int j = 0; j < (BYTES_PER_THREAD/ALIGNMENT); j++)
+      {
+        bulk_buffer[j] = ptx_cudaDMA_load<LOCAL_TYPENAME,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((LOCAL_TYPENAME*)src_ptr);
+        src_ptr += intra_elmt_stride;
+      }
+      for (int j = 0; j < (BYTES_PER_THREAD/ALIGNMENT); j++)
+      {
+        ptx_cudaDMA_store<LOCAL_TYPENAME,DMA_STORE_QUAL>(bulk_buffer[j], (LOCAL_TYPENAME*)dst_ptr);
+        dst_ptr += intra_elmt_stride;
+      }
+    }
+    if (DMA_PARTIAL_ITERS > 0)
+    {
+      for (int i = 0; i < DMA_PARTIAL_ITERS; i++)
+      {
+        bulk_buffer[i] = ptx_cudaDMA_load<LOCAL_TYPENAME,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((LOCAL_TYPENAME*)src_ptr);
+        src_ptr += intra_elmt_stride;
+      }
+      for (int i = 0; i < DMA_PARTIAL_ITERS; i++)
+      {
+        ptx_cudaDMA_store<LOCAL_TYPENAME,DMA_STORE_QUAL>(bulk_buffer[i], (LOCAL_TYPENAME*)dst_ptr);
+        dst_ptr += intra_elmt_stride;
+      }
+    }
+    if (DMA_PARTIAL_BYTES)
+    {
+      switch (partial_bytes)
+      {
+        case 0:
+          break;
+        case 4:
+          {
+            float tmp = ptx_cudaDMA_load<float,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float*)src_ptr);
+            ptx_cudaDMA_store<float,DMA_STORE_QUAL>(tmp, (float*)dst_ptr);
+            break;
+          }
+        case 8:
+          {
+            float2 tmp = ptx_cudaDMA_load<float2,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float2*)src_ptr);
+            ptx_cudaDMA_store<float2,DMA_STORE_QUAL>(tmp, (float2*)dst_ptr);
+            break;
+          }
+        case 12:
+          {
+            float3 tmp = ptx_cudaDMA_load<float3,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float3*)src_ptr);
+            ptx_cudaDMA_store<float3,DMA_STORE_QUAL>(tmp, (float3*)dst_ptr);
+            break;
+          }
+        case 16:
+          {
+            float4 tmp = ptx_cudaDMA_load<float4,DMA_GLOBAL_LOAD,DMA_LOAD_QUAL>((float4*)src_ptr);
+            ptx_cudaDMA_store<float4,DMA_STORE_QUAL>(tmp, (float4*)dst_ptr);
+            break;
+          }
+#ifdef DEBUG_CUDADMA
+        default:
+          assert(false);
+#endif
+      }
+    }
+  }
+private:
+  LOAD_16_PARTIAL_BYTES_IMPL
+  STORE_16_PARTIAL_BYTES_IMPL
+private:
+  const char *dma_src_off_ptr;
+  const int *dma_index_ptr;
+  const unsigned int dma_index_offset;
+  const unsigned int dma_index_step_stride;
+  const unsigned int dma_index_elmt_stride;
+  const unsigned int dma_elmt_offset;
+  const unsigned int dma_offset;
+  const unsigned int dma_step_stride;
+  const unsigned int dma_elmt_stride;
+  const unsigned int dma_intra_elmt_stride;
+  const unsigned int dma_partial_bytes;
+  const unsigned int dma_partial_offset;
+  const unsigned int dma_partial_elmts;
+  const bool         dma_active_warp;
+  LOCAL_TYPENAME bulk_buffer[BYTES_PER_THREAD/ALIGNMENT];
+  LOCAL_TYPENAME across_buffer[GUARD_ZERO(SPLIT_WARP ? ROW_ITERS_SPLIT : 
+  				BIG_ELMTS ? 1 : ROW_ITERS_FULL)*ALIGNMENT/sizeof(LOCAL_TYPENAME)];
+};
+#undef LOCAL_TYPENAME
+#undef ALIGNMENT
+
+#undef TEMPLATE_FOUR_IMPL
+
+#undef INDIRECT_START_XFER_IMPL
+#undef INDIRECT_WAIT_XFER_IMPL
+
 #undef WARP_SPECIALIZED_UNQUALIFIED_METHODS
 #undef WARP_SPECIALIZED_QUALIFIED_METHODS
 #undef NON_WARP_SPECIALIZED_UNQUALIFIED_METHODS
@@ -8477,6 +10684,15 @@ private:
 #undef STORE_4_PARTIAL_BYTES_IMPL
 #undef STORE_8_PARTIAL_BYTES_IMPL
 #undef STORE_16_PARTIAL_BYTES_IMPL
+
+#undef INIT_INDEX_OFFSET
+#undef INIT_INDEX_STEP_STRIDE
+#undef INIT_INDEX_ELMT_STRIDE
+#undef INIT_INDIRECT_ELMT_OFFSET
+#undef INIT_INDIRECT_OFFSET
+#undef INIT_INDIRECT_STEP_STRIDE
+#undef INIT_INDIRECT_ELMT_STRIDE
+#undef SELECT_STRIDE
 
 #undef MAX_LDS_PER_THREAD
 #undef LDS_PER_ELMT
@@ -8567,7 +10783,7 @@ private:
 #undef INIT_PARTIAL_BYTES
 #undef INIT_PARTIAL_ELMTS
 #undef INIT_PARTIAL_OFFSET
-////////////////////////  End of CudaDMAStrided    //////////////////////////////////////////////////
+////////////////////////  End of CudaDMAIndirect    //////////////////////////////////////////////////
 
 #undef WARP_SIZE
 #undef WARP_MASK

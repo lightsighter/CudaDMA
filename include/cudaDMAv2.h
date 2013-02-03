@@ -16,6 +16,9 @@
 
 #pragma once
 
+// For diagnostic functions we need printf
+#include <cstdio>
+
 #define WARP_SIZE 32
 #define WARP_MASK 0x1f
 #define CUDADMA_DMA_TID (threadIdx.x-dma_threadIdx_start)
@@ -1361,7 +1364,7 @@ protected:
  * BYTES_PER_ELMT - the size of the element to be transfered
  * DMA_THREADS - the number of DMA Threads that are going to be statically allocated
  */
-template<bool DO_SYNC, int ALIGNMENT, int BYTES_PER_THREAD=4*ALIGNMENT, int BYTES_PER_ELMT=0, int DMA_THREADS=0>
+template<bool DO_SYNC=false, int ALIGNMENT=0, int BYTES_PER_THREAD=4*ALIGNMENT, int BYTES_PER_ELMT=0, int DMA_THREADS=0>
 class CudaDMASequential : public CudaDMA {
 public:
   __device__ CudaDMASequential(const int dmaID,
@@ -1395,6 +1398,64 @@ public:
 #define THREAD_LEFTOVER (int(REMAINING_BYTES) - int(CUDADMA_DMA_TID*ALIGNMENT))
 #define THREAD_PARTIAL_BYTES ((THREAD_LEFTOVER > ALIGNMENT) ? ALIGNMENT : \
                               (THREAD_LEFTOVER < 0) ? 0 : THREAD_LEFTOVER)
+
+template<bool DO_SYNC>
+class CudaDMASequential<DO_SYNC,0,0,0,0> {
+public:
+  __host__
+  static void diagnose(const int ALIGNMENT, const int BYTES_PER_THREAD, const int BYTES_PER_ELMT,
+                       const int DMA_THREADS, const bool FULL_TEMPLATE, const bool verbose = false)
+  {
+#define PRINT_VAR(var_name) printf(#var_name " %d\n", (var_name))
+    fprintf(stdout,"********************************************************************\n");
+    fprintf(stdout,"*                                                                  *\n");
+    fprintf(stdout,"*            Diagnostic Printing for CudaDMASequential             *\n");
+    fprintf(stdout,"*                                                                  *\n");
+    fprintf(stdout,"********************************************************************\n");
+    fprintf(stdout,"\n");
+    fprintf(stdout,"  PARAMETERS\n");
+    fprintf(stdout,"    - ALIGNMENT:          %d\n",ALIGNMENT);
+    fprintf(stdout,"    - BYTES-PER-THREAD    %d\n",BYTES_PER_THREAD);
+    fprintf(stdout,"    - BYTES-PER-ELMT      %d\n",BYTES_PER_ELMT);
+    fprintf(stdout,"    - DMA THREADS         %d\n",DMA_THREADS);
+    fprintf(stdout,"    - FULLY TEMPLATED     %s\n", (FULL_TEMPLATE ? "true" : "false"));
+    fprintf(stdout,"\n");
+    unsigned int total_steps = BULK_STEPS;
+    if ((PARTIAL_LDS > 0) || (REMAINING_BYTES > 0))
+      total_steps++;
+    fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", total_steps);
+    if (total_steps == 1)
+    {
+      fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
+    }
+    else
+    {
+      fprintf(stdout,"  DIAGNOSIS: UN-OPTIIZED! This transfer requires multiple steps to \n");
+      fprintf(stdout,"                          be performed. See recommendations below...\n");
+      fprintf(stdout,"  RECOMENDATIONS:\n");
+      fprintf(stdout,"    - Increase the number of DMA threads particpating in the transfer\n");
+      fprintf(stdout,"    - Increase the number of bytes available for outstanding loads\n");
+      if (ALIGNMENT < 16)
+      {
+        fprintf(stdout,"    - Increase element size thereby loading superflous data with the benefit\n");
+        fprintf(stdout,"          of improving guaranteed alignment of pointers\n");
+      }
+    }
+    if (verbose)
+    {
+      PRINT_VAR(FULL_LD_STRIDE);
+      PRINT_VAR(BULK_LDS);
+      PRINT_VAR(BULK_STEP_STRIDE);
+      PRINT_VAR(BULK_STEPS);
+      PRINT_VAR(PARTIAL_BYTES);
+      PRINT_VAR(PARTIAL_LDS);
+      PRINT_VAR(REMAINING_BYTES);
+    }
+    fprintf(stdout,"\n\n");
+    fflush(stdout);
+#undef PRINT_VAR
+  }
+};
 
 #define WARP_SPECIALIZED_UNQUALIFIED_METHODS                                                        \
   __device__ __forceinline__ void execute_dma(const void *RESTRICT src_ptr, void *RESTRICT dst_ptr) \
@@ -3129,8 +3190,7 @@ private:
 #define INIT_PARTIAL_OFFSET (SPLIT_WARP ? 0 : BIG_ELMTS ? 0 : \
                             ((FULL_LDS_PER_ELMT - (FULL_LDS_PER_ELMT % (WARPS_PER_ELMT * WARP_SIZE))) * ALIGNMENT))
 
-
-template<bool DO_SYNC, int ALIGNMENT, int BYTES_PER_THREAD=4*ALIGNMENT, int BYTES_PER_ELMT=0,
+template<bool DO_SYNC=false, int ALIGNMENT=0, int BYTES_PER_THREAD=4*ALIGNMENT, int BYTES_PER_ELMT=0,
          int DMA_THREADS=0, int NUM_ELMTS=0>
 class CudaDMAStrided : public CudaDMA {
 public:
@@ -3141,6 +3201,294 @@ public:
   {
     // This template should never be instantiated
     STATIC_ASSERT(DO_SYNC && !DO_SYNC);
+  }
+};
+
+// Default class implementation that supports diagnostic printing for CudaDMAStrided
+template<bool DO_SYNC>
+class CudaDMAStrided<DO_SYNC,0,0,0,0,0> {
+public:
+  __host__
+  static void diagnose(const int ALIGNMENT, const int BYTES_PER_THREAD, const int BYTES_PER_ELMT,
+                       const int DMA_THREADS, const int NUM_ELMTS, const bool FULL_TEMPLATE, 
+                       const bool verbose = false)
+  {
+#define PRINT_VAR(var_name) printf(#var_name " %d\n", (var_name))
+    fprintf(stdout,"********************************************************************\n");
+    fprintf(stdout,"*                                                                  *\n");
+    fprintf(stdout,"*              Diagnostic Printing for CudaDMAStrided              *\n");
+    fprintf(stdout,"*                                                                  *\n");
+    fprintf(stdout,"********************************************************************\n");
+    fprintf(stdout,"\n");
+    fprintf(stdout,"  PARAMETERS\n");
+    fprintf(stdout,"    - ALIGNMENT:          %d\n",ALIGNMENT);
+    fprintf(stdout,"    - BYTES-PER-THREAD    %d\n",BYTES_PER_THREAD);
+    fprintf(stdout,"    - BYTES-PER-ELMT      %d\n",BYTES_PER_ELMT);
+    fprintf(stdout,"    - NUM ELMTS           %d\n",NUM_ELMTS);
+    fprintf(stdout,"    - DMA THREADS         %d\n",DMA_THREADS);
+    fprintf(stdout,"    - FULLY TEMPLATED     %s\n", (FULL_TEMPLATE ? "true" : "false"));
+    fprintf(stdout,"\n");
+    if (!FULL_TEMPLATE)
+    {
+      if (SPLIT_WARP)
+      {
+        fprintf(stdout,"  Case: Split Elements - element sizes are sufficiently small that a single\n");
+        fprintf(stdout,"                         warp can load multiple elements per step\n");
+        // +1 because the number of steps == 0 in the good case
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_SPLIT+1);
+        if (STEP_ITERS_SPLIT == 0)
+        {
+          fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
+        }
+        else
+        {
+          fprintf(stdout,"  DIAGNOSIS: UN-OPTIIZED! This transfer requires multiple steps to \n");
+          fprintf(stdout,"                          be performed. See recommendations below...\n");
+          fprintf(stdout,"  RECOMENDATIONS:\n");
+          fprintf(stdout,"    - Increase the number of DMA threads particpating in the transfer\n");
+          fprintf(stdout,"    - Increase the number of bytes available for outstanding loads\n");
+          if (ALIGNMENT < 16)
+          {
+            fprintf(stdout,"    - Increase element size thereby loading superflous data with the benefit\n");
+            fprintf(stdout,"          of improving guaranteed alignment of pointers\n");
+          }
+        }
+        if (verbose)
+        {
+          PRINT_VAR(THREADS_PER_ELMT);
+          PRINT_VAR(ELMT_PER_STEP_SPLIT);
+          PRINT_VAR(ROW_ITERS_SPLIT);
+          PRINT_VAR(HAS_PARTIAL_ELMTS_SPLIT);
+          PRINT_VAR(HAS_PARTIAL_BYTES_SPLIT);
+          PRINT_VAR(COL_ITERS_SPLIT);
+          PRINT_VAR(STEP_ITERS_SPLIT);
+        }
+      }
+      else if (BIG_ELMTS)
+      {
+        fprintf(stdout,"  Case: Big Elements - each element is so large that it cannot be loaded by all\n");
+        fprintf(stdout,"                       warps performing as many loads as possible.\n");
+        fprintf(stdout,"  DIAGNOSIS: UN-OPTIIZED! This transfer requires multiple steps to \n");
+        fprintf(stdout,"                          be performed. See recommendations below...\n");
+        fprintf(stdout,"  RECOMENDATIONS:\n");
+        fprintf(stdout,"    - Increase the number of DMA threads particpating in the transfer\n");
+        fprintf(stdout,"    - Increase the number of bytes available for outstanding loads\n");
+        if (ALIGNMENT < 16)
+        {
+          fprintf(stdout,"    - Increase element size thereby loading superflous data with the benefit\n");
+          fprintf(stdout,"          of improving guaranteed alignment of pointers\n");
+        }
+        if (verbose)
+        {
+          PRINT_VAR(HAS_PARTIAL_ELMTS_BIG);
+          PRINT_VAR(HAS_PARTIAL_BYTES_BIG);
+          PRINT_VAR(MAX_ITERS_BIG);
+          PRINT_VAR(PART_ITERS_BIG);
+          PRINT_VAR(STEP_ITERS_BIG);
+          PRINT_VAR(REMAINING_BYTES_BIG);
+        }
+      }
+      else
+      {
+        fprintf(stdout,"  Case: Full Elements - element sizes are sufficiently small that %d elements\n", 
+                ((ELMT_PER_STEP_PER_THREAD > NUM_ELMTS) ? NUM_ELMTS : ELMT_PER_STEP_PER_THREAD));
+        fprintf(stdout,"                        can be loading by %d warps per step.  This means there\n", WARPS_PER_ELMT);
+        fprintf(stdout,"                        are a total of %d elements being loaded per step.\n", 
+                ((ELMT_PER_STEP_FULL > NUM_ELMTS) ? NUM_ELMTS : ELMT_PER_STEP_FULL));
+        // +1 because the number of steps == 0 in the good case
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_FULL+1);
+        if (STEP_ITERS_FULL == 0)
+        {
+          fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
+        }
+        else
+        {
+          fprintf(stdout,"  DIAGNOSIS: UN-OPTIIZED! This transfer requires multiple steps to \n");
+          fprintf(stdout,"                          be performed. See recommendations below...\n");
+          fprintf(stdout,"  RECOMENDATIONS:\n");
+          fprintf(stdout,"    - Increase the number of DMA threads particpating in the transfer\n");
+          fprintf(stdout,"    - Increase the number of bytes available for outstanding loads\n");
+          if (ALIGNMENT < 16)
+          {
+            fprintf(stdout,"    - Increase element size thereby loading superflous data with the benefit\n");
+            fprintf(stdout,"          of improving guaranteed alignment of pointers\n");
+          }
+        }
+        if (verbose)
+        {
+          PRINT_VAR(NUM_WARPS);
+          PRINT_VAR(WARPS_PER_ELMT);
+          PRINT_VAR(LDS_PER_ELMT_PER_THREAD);
+          PRINT_VAR(ELMT_PER_STEP_PER_THREAD);
+          PRINT_VAR(ELMT_PER_STEP_FULL);
+          PRINT_VAR(ROW_ITERS_FULL);
+          PRINT_VAR(HAS_PARTIAL_ELMTS_FULL);
+          PRINT_VAR(HAS_PARTIAL_BYTES_FULL);
+          PRINT_VAR(COL_ITERS_FULL);
+          PRINT_VAR(STEP_ITERS_FULL);
+          PRINT_VAR(ALL_WARPS_ACTIVE);
+          PRINT_VAR(NUM_ACTIVE_WARPS);
+          PRINT_VAR(REMAINING_ELMTS_FULL);
+        }
+      }
+      if (verbose)
+      {
+        PRINT_VAR(MAX_LDS_PER_THREAD);
+        PRINT_VAR(LDS_PER_ELMT);
+        PRINT_VAR(FULL_LDS_PER_ELMT);
+        PRINT_VAR(SPLIT_WARP);
+        PRINT_VAR(BIG_ELMTS);
+        PRINT_VAR(INIT_SRC_STEP_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_DST_STEP_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_SRC_ELMT_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_DST_ELMT_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_INTRA_ELMT_STRIDE);
+        PRINT_VAR(INIT_PARTIAL_OFFSET);
+      }
+    }
+    else
+    {
+      // Since all template parameters are supplied switch to the better static assignment
+      // of warps to elements
+#undef MINIMUM_COVER
+#undef WARPS_PER_ELMT
+#define SINGLE_WARP ((LDS_PER_ELMT <= (WARP_SIZE*MAX_LDS_PER_THREAD)) && (NUM_WARPS <= NUM_ELMTS))
+#define MINIMUM_COVER ((LDS_PER_ELMT+(WARP_SIZE*MAX_LDS_PER_THREAD)-1)/(WARP_SIZE*MAX_LDS_PER_THREAD))
+#define MAX_WARPS_PER_ELMT ((LDS_PER_ELMT+WARP_SIZE-1)/WARP_SIZE)
+#define WARPS_PER_ELMT (SINGLE_WARP ? 1 : \
+                        BIG_ELMTS ? NUM_WARPS : \
+                        ((NUM_WARPS/MINIMUM_COVER) <= NUM_ELMTS) ? MINIMUM_COVER : \
+                        ((MAX_WARPS_PER_ELMT >= NUM_WARPS) ? NUM_WARPS : MAX_WARPS_PER_ELMT))
+      if (SPLIT_WARP)
+      {
+        fprintf(stdout,"  Case: Split Elements - element sizes are sufficiently small that a single\n");
+        fprintf(stdout,"                         warp can load multiple elements per step\n");
+        // +1 because the number of steps == 0 in the good case
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_SPLIT+1);
+        if (STEP_ITERS_SPLIT == 0)
+        {
+          fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
+        }
+        else
+        {
+          fprintf(stdout,"  DIAGNOSIS: UN-OPTIIZED! This transfer requires multiple steps to \n");
+          fprintf(stdout,"                          be performed. See recommendations below...\n");
+          fprintf(stdout,"  RECOMENDATIONS:\n");
+          fprintf(stdout,"    - Increase the number of DMA threads particpating in the transfer\n");
+          fprintf(stdout,"    - Increase the number of bytes available for outstanding loads\n");
+          if (ALIGNMENT < 16)
+          {
+            fprintf(stdout,"    - Increase element size thereby loading superflous data with the benefit\n");
+            fprintf(stdout,"          of improving guaranteed alignment of pointers\n");
+          }
+        }
+        if (verbose)
+        {
+          PRINT_VAR(THREADS_PER_ELMT);
+          PRINT_VAR(ELMT_PER_STEP_SPLIT);
+          PRINT_VAR(ROW_ITERS_SPLIT);
+          PRINT_VAR(HAS_PARTIAL_ELMTS_SPLIT);
+          PRINT_VAR(HAS_PARTIAL_BYTES_SPLIT);
+          PRINT_VAR(COL_ITERS_SPLIT);
+          PRINT_VAR(STEP_ITERS_SPLIT);
+        }
+      }
+      else if (BIG_ELMTS)
+      {
+        fprintf(stdout,"  Case: Big Elements - each element is so large that it cannot be loaded by all\n");
+        fprintf(stdout,"                       warps performing as many loads as possible.\n");
+        fprintf(stdout,"  DIAGNOSIS: UN-OPTIIZED! This transfer requires multiple steps to \n");
+        fprintf(stdout,"                          be performed. See recommendations below...\n");
+        fprintf(stdout,"  RECOMENDATIONS:\n");
+        fprintf(stdout,"    - Increase the number of DMA threads particpating in the transfer\n");
+        fprintf(stdout,"    - Increase the number of bytes available for outstanding loads\n");
+        if (ALIGNMENT < 16)
+        {
+          fprintf(stdout,"    - Increase element size thereby loading superflous data with the benefit\n");
+          fprintf(stdout,"          of improving guaranteed alignment of pointers\n");
+        }
+        if (verbose)
+        {
+          PRINT_VAR(HAS_PARTIAL_ELMTS_BIG);
+          PRINT_VAR(HAS_PARTIAL_BYTES_BIG);
+          PRINT_VAR(MAX_ITERS_BIG);
+          PRINT_VAR(PART_ITERS_BIG);
+          PRINT_VAR(STEP_ITERS_BIG);
+          PRINT_VAR(REMAINING_BYTES_BIG);
+        }
+      }
+      else
+      {
+        fprintf(stdout,"  Case: Full Elements - element sizes are sufficiently small that %d elements\n", 
+                ((ELMT_PER_STEP_PER_THREAD > NUM_ELMTS) ? NUM_ELMTS : ELMT_PER_STEP_PER_THREAD));
+        fprintf(stdout,"                        can be loading by %d warps per step.  This means there\n", WARPS_PER_ELMT);
+        fprintf(stdout,"                        are a total of %d elements being loaded per step.\n", 
+                ((ELMT_PER_STEP_FULL > NUM_ELMTS) ? NUM_ELMTS : ELMT_PER_STEP_FULL));
+        // +1 because the number of steps == 0 in the good case
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_FULL+1);
+        if (STEP_ITERS_FULL == 0)
+        {
+          fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
+        }
+        else
+        {
+          fprintf(stdout,"  DIAGNOSIS: UN-OPTIIZED! This transfer requires multiple steps to \n");
+          fprintf(stdout,"                          be performed. See recommendations below...\n");
+          fprintf(stdout,"  RECOMENDATIONS:\n");
+          fprintf(stdout,"    - Increase the number of DMA threads particpating in the transfer\n");
+          fprintf(stdout,"    - Increase the number of bytes available for outstanding loads\n");
+          if (ALIGNMENT < 16)
+          {
+            fprintf(stdout,"    - Increase element size thereby loading superflous data with the benefit\n");
+            fprintf(stdout,"          of improving guaranteed alignment of pointers\n");
+          }
+        }
+        if (verbose)
+        {
+          PRINT_VAR(NUM_WARPS);
+          PRINT_VAR(SINGLE_WARP);
+          PRINT_VAR(MAX_WARPS_PER_ELMT);
+          PRINT_VAR(MINIMUM_COVER);
+          PRINT_VAR(WARPS_PER_ELMT);
+          PRINT_VAR(LDS_PER_ELMT_PER_THREAD);
+          PRINT_VAR(ELMT_PER_STEP_PER_THREAD);
+          PRINT_VAR(ELMT_PER_STEP_FULL);
+          PRINT_VAR(ROW_ITERS_FULL);
+          PRINT_VAR(HAS_PARTIAL_ELMTS_FULL);
+          PRINT_VAR(HAS_PARTIAL_BYTES_FULL);
+          PRINT_VAR(COL_ITERS_FULL);
+          PRINT_VAR(STEP_ITERS_FULL);
+          PRINT_VAR(ALL_WARPS_ACTIVE);
+          PRINT_VAR(NUM_ACTIVE_WARPS);
+          PRINT_VAR(REMAINING_ELMTS_FULL);
+        }
+      }
+      if (verbose)
+      {
+        PRINT_VAR(MAX_LDS_PER_THREAD);
+        PRINT_VAR(LDS_PER_ELMT);
+        PRINT_VAR(FULL_LDS_PER_ELMT);
+        PRINT_VAR(SPLIT_WARP);
+        PRINT_VAR(BIG_ELMTS);
+        PRINT_VAR(INIT_SRC_STEP_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_DST_STEP_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_SRC_ELMT_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_DST_ELMT_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_INTRA_ELMT_STRIDE);
+        PRINT_VAR(INIT_PARTIAL_OFFSET);
+      }
+      // Now that we're done, switch everything back
+#undef SINGLE_WARP
+#undef MINIMUM_COVER
+#undef MAX_WARPS_PER_ELMT
+#undef WARPS_PER_ELMT
+#define MINIMUM_COVER ((LDS_PER_ELMT+(WARP_SIZE*MAX_LDS_PER_THREAD)-1)/(WARP_SIZE*MAX_LDS_PER_THREAD))
+#define WARPS_PER_ELMT (BIG_ELMTS ? NUM_WARPS : \
+                        (MINIMUM_COVER > 0) ? MINIMUM_COVER : 1)
+    }
+    fprintf(stdout,"\n\n");
+    fflush(stdout);
+#undef PRINT_VAR
   }
 };
 
@@ -9030,7 +9378,7 @@ private:
  * is peforming a gather or a scatter.
  */
 
-template<bool GATHER, bool DO_SYNC, int ALIGNMENT, int BYTES_PER_THREAD=4*ALIGNMENT, 
+template<bool GATHER=true, bool DO_SYNC=false, int ALIGNMENT=0, int BYTES_PER_THREAD=4*ALIGNMENT, 
          int BYTES_PER_ELMT=0, int DMA_THREADS=0, int NUM_ELMTS=0>
 class CudaDMAIndirect : public CudaDMA {
 public:
@@ -9065,6 +9413,289 @@ public:
 #define MINIMUM_COVER ((LDS_PER_ELMT+(WARP_SIZE*MAX_LDS_PER_THREAD)-1)/(WARP_SIZE*MAX_LDS_PER_THREAD))
 #define WARPS_PER_ELMT (BIG_ELMTS ? NUM_WARPS : \
                         (MINIMUM_COVER > 0) ? MINIMUM_COVER : 1)
+
+template<bool GATHER, bool DO_SYNC>
+class CudaDMAIndirect<GATHER,DO_SYNC,0,0,0,0,0> {
+public:
+  __host__
+  static void diagnose(const int ALIGNMENT, const int BYTES_PER_THREAD, const int BYTES_PER_ELMT,
+                       const int DMA_THREADS, const int NUM_ELMTS, const bool FULL_TEMPLATE, 
+                       const bool verbose = false)
+  {
+#define PRINT_VAR(var_name) printf(#var_name " %d\n", (var_name))
+    fprintf(stdout,"********************************************************************\n");
+    fprintf(stdout,"*                                                                  *\n");
+    fprintf(stdout,"*              Diagnostic Printing for CudaDMAIndirect             *\n");
+    fprintf(stdout,"*                                                                  *\n");
+    fprintf(stdout,"********************************************************************\n");
+    fprintf(stdout,"\n");
+    fprintf(stdout,"  PARAMETERS\n");
+    fprintf(stdout,"    - ALIGNMENT:          %d\n",ALIGNMENT);
+    fprintf(stdout,"    - BYTES-PER-THREAD    %d\n",BYTES_PER_THREAD);
+    fprintf(stdout,"    - BYTES-PER-ELMT      %d\n",BYTES_PER_ELMT);
+    fprintf(stdout,"    - NUM ELMTS           %d\n",NUM_ELMTS);
+    fprintf(stdout,"    - DMA THREADS         %d\n",DMA_THREADS);
+    fprintf(stdout,"    - FULLY TEMPLATED     %s\n", (FULL_TEMPLATE ? "true" : "false"));
+    fprintf(stdout,"\n");
+    if (!FULL_TEMPLATE)
+    {
+      if (SPLIT_WARP)
+      {
+        fprintf(stdout,"  Case: Split Elements - element sizes are sufficiently small that a single\n");
+        fprintf(stdout,"                         warp can load multiple elements per step\n");
+        // +1 because the number of steps == 0 in the good case
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_SPLIT+1);
+        if (STEP_ITERS_SPLIT == 0)
+        {
+          fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
+        }
+        else
+        {
+          fprintf(stdout,"  DIAGNOSIS: UN-OPTIIZED! This transfer requires multiple steps to \n");
+          fprintf(stdout,"                          be performed. See recommendations below...\n");
+          fprintf(stdout,"  RECOMENDATIONS:\n");
+          fprintf(stdout,"    - Increase the number of DMA threads particpating in the transfer\n");
+          fprintf(stdout,"    - Increase the number of bytes available for outstanding loads\n");
+          if (ALIGNMENT < 16)
+          {
+            fprintf(stdout,"    - Increase element size thereby loading superflous data with the benefit\n");
+            fprintf(stdout,"          of improving guaranteed alignment of pointers\n");
+          }
+        }
+        if (verbose)
+        {
+          PRINT_VAR(THREADS_PER_ELMT);
+          PRINT_VAR(ELMT_PER_STEP_SPLIT);
+          PRINT_VAR(ROW_ITERS_SPLIT);
+          PRINT_VAR(HAS_PARTIAL_ELMTS_SPLIT);
+          PRINT_VAR(HAS_PARTIAL_BYTES_SPLIT);
+          PRINT_VAR(COL_ITERS_SPLIT);
+          PRINT_VAR(STEP_ITERS_SPLIT);
+        }
+      }
+      else if (BIG_ELMTS)
+      {
+        fprintf(stdout,"  Case: Big Elements - each element is so large that it cannot be loaded by all\n");
+        fprintf(stdout,"                       warps performing as many loads as possible.\n");
+        fprintf(stdout,"  DIAGNOSIS: UN-OPTIIZED! This transfer requires multiple steps to \n");
+        fprintf(stdout,"                          be performed. See recommendations below...\n");
+        fprintf(stdout,"  RECOMENDATIONS:\n");
+        fprintf(stdout,"    - Increase the number of DMA threads particpating in the transfer\n");
+        fprintf(stdout,"    - Increase the number of bytes available for outstanding loads\n");
+        if (ALIGNMENT < 16)
+        {
+          fprintf(stdout,"    - Increase element size thereby loading superflous data with the benefit\n");
+          fprintf(stdout,"          of improving guaranteed alignment of pointers\n");
+        }
+        if (verbose)
+        {
+          PRINT_VAR(HAS_PARTIAL_ELMTS_BIG);
+          PRINT_VAR(HAS_PARTIAL_BYTES_BIG);
+          PRINT_VAR(MAX_ITERS_BIG);
+          PRINT_VAR(PART_ITERS_BIG);
+          PRINT_VAR(STEP_ITERS_BIG);
+          PRINT_VAR(REMAINING_BYTES_BIG);
+        }
+      }
+      else
+      {
+        fprintf(stdout,"  Case: Full Elements - element sizes are sufficiently small that %d elements\n", 
+                ((ELMT_PER_STEP_PER_THREAD > NUM_ELMTS) ? NUM_ELMTS : ELMT_PER_STEP_PER_THREAD));
+        fprintf(stdout,"                        can be loading by %d warps per step.  This means there\n", WARPS_PER_ELMT);
+        fprintf(stdout,"                        are a total of %d elements being loaded per step.\n", 
+                ((ELMT_PER_STEP_FULL > NUM_ELMTS) ? NUM_ELMTS : ELMT_PER_STEP_FULL));
+        // +1 because the number of steps == 0 in the good case
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_FULL+1);
+        if (STEP_ITERS_FULL == 0)
+        {
+          fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
+        }
+        else
+        {
+          fprintf(stdout,"  DIAGNOSIS: UN-OPTIIZED! This transfer requires multiple steps to \n");
+          fprintf(stdout,"                          be performed. See recommendations below...\n");
+          fprintf(stdout,"  RECOMENDATIONS:\n");
+          fprintf(stdout,"    - Increase the number of DMA threads particpating in the transfer\n");
+          fprintf(stdout,"    - Increase the number of bytes available for outstanding loads\n");
+          if (ALIGNMENT < 16)
+          {
+            fprintf(stdout,"    - Increase element size thereby loading superflous data with the benefit\n");
+            fprintf(stdout,"          of improving guaranteed alignment of pointers\n");
+          }
+        }
+        if (verbose)
+        {
+          PRINT_VAR(NUM_WARPS);
+          PRINT_VAR(WARPS_PER_ELMT);
+          PRINT_VAR(LDS_PER_ELMT_PER_THREAD);
+          PRINT_VAR(ELMT_PER_STEP_PER_THREAD);
+          PRINT_VAR(ELMT_PER_STEP_FULL);
+          PRINT_VAR(ROW_ITERS_FULL);
+          PRINT_VAR(HAS_PARTIAL_ELMTS_FULL);
+          PRINT_VAR(HAS_PARTIAL_BYTES_FULL);
+          PRINT_VAR(COL_ITERS_FULL);
+          PRINT_VAR(STEP_ITERS_FULL);
+          PRINT_VAR(ALL_WARPS_ACTIVE);
+          PRINT_VAR(NUM_ACTIVE_WARPS);
+          PRINT_VAR(REMAINING_ELMTS_FULL);
+        }
+      }
+      if (verbose)
+      {
+        PRINT_VAR(MAX_LDS_PER_THREAD);
+        PRINT_VAR(LDS_PER_ELMT);
+        PRINT_VAR(FULL_LDS_PER_ELMT);
+        PRINT_VAR(SPLIT_WARP);
+        PRINT_VAR(BIG_ELMTS);
+        PRINT_VAR(INIT_SRC_STEP_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_DST_STEP_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_SRC_ELMT_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_DST_ELMT_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_INTRA_ELMT_STRIDE);
+        PRINT_VAR(INIT_PARTIAL_OFFSET);
+      }
+    }
+    else
+    {
+      // Since all template parameters are supplied switch to the better static assignment
+      // of warps to elements
+#undef MINIMUM_COVER
+#undef WARPS_PER_ELMT
+#define MINIMUM_COVER ((LDS_PER_ELMT+(WARP_SIZE*MAX_LDS_PER_THREAD)-1)/(WARP_SIZE*MAX_LDS_PER_THREAD))
+#define WARPS_PER_ELMT (SINGLE_WARP ? 1 : \
+                        BIG_ELMTS ? NUM_WARPS : \
+                        ((NUM_WARPS/MINIMUM_COVER) <= NUM_ELMTS) ? MINIMUM_COVER : \
+                        ((MAX_WARPS_PER_ELMT >= NUM_WARPS) ? NUM_WARPS : MAX_WARPS_PER_ELMT))
+      if (SPLIT_WARP)
+      {
+        fprintf(stdout,"  Case: Split Elements - element sizes are sufficiently small that a single\n");
+        fprintf(stdout,"                         warp can load multiple elements per step\n");
+        // +1 because the number of steps == 0 in the good case
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_SPLIT+1);
+        if (STEP_ITERS_SPLIT == 0)
+        {
+          fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
+        }
+        else
+        {
+          fprintf(stdout,"  DIAGNOSIS: UN-OPTIIZED! This transfer requires multiple steps to \n");
+          fprintf(stdout,"                          be performed. See recommendations below...\n");
+          fprintf(stdout,"  RECOMENDATIONS:\n");
+          fprintf(stdout,"    - Increase the number of DMA threads particpating in the transfer\n");
+          fprintf(stdout,"    - Increase the number of bytes available for outstanding loads\n");
+          if (ALIGNMENT < 16)
+          {
+            fprintf(stdout,"    - Increase element size thereby loading superflous data with the benefit\n");
+            fprintf(stdout,"          of improving guaranteed alignment of pointers\n");
+          }
+        }
+        if (verbose)
+        {
+          PRINT_VAR(THREADS_PER_ELMT);
+          PRINT_VAR(ELMT_PER_STEP_SPLIT);
+          PRINT_VAR(ROW_ITERS_SPLIT);
+          PRINT_VAR(HAS_PARTIAL_ELMTS_SPLIT);
+          PRINT_VAR(HAS_PARTIAL_BYTES_SPLIT);
+          PRINT_VAR(COL_ITERS_SPLIT);
+          PRINT_VAR(STEP_ITERS_SPLIT);
+        }
+      }
+      else if (BIG_ELMTS)
+      {
+        fprintf(stdout,"  Case: Big Elements - each element is so large that it cannot be loaded by all\n");
+        fprintf(stdout,"                       warps performing as many loads as possible.\n");
+        fprintf(stdout,"  DIAGNOSIS: UN-OPTIIZED! This transfer requires multiple steps to \n");
+        fprintf(stdout,"                          be performed. See recommendations below...\n");
+        fprintf(stdout,"  RECOMENDATIONS:\n");
+        fprintf(stdout,"    - Increase the number of DMA threads particpating in the transfer\n");
+        fprintf(stdout,"    - Increase the number of bytes available for outstanding loads\n");
+        if (ALIGNMENT < 16)
+        {
+          fprintf(stdout,"    - Increase element size thereby loading superflous data with the benefit\n");
+          fprintf(stdout,"          of improving guaranteed alignment of pointers\n");
+        }
+        if (verbose)
+        {
+          PRINT_VAR(HAS_PARTIAL_ELMTS_BIG);
+          PRINT_VAR(HAS_PARTIAL_BYTES_BIG);
+          PRINT_VAR(MAX_ITERS_BIG);
+          PRINT_VAR(PART_ITERS_BIG);
+          PRINT_VAR(STEP_ITERS_BIG);
+          PRINT_VAR(REMAINING_BYTES_BIG);
+        }
+      }
+      else
+      {
+        fprintf(stdout,"  Case: Full Elements - element sizes are sufficiently small that %d elements\n", 
+                ((ELMT_PER_STEP_PER_THREAD > NUM_ELMTS) ? NUM_ELMTS : ELMT_PER_STEP_PER_THREAD));
+        fprintf(stdout,"                        can be loading by %d warps per step.  This means there\n", WARPS_PER_ELMT);
+        fprintf(stdout,"                        are a total of %d elements being loaded per step.\n", 
+                ((ELMT_PER_STEP_FULL > NUM_ELMTS) ? NUM_ELMTS : ELMT_PER_STEP_FULL));
+        // +1 because the number of steps == 0 in the good case
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_FULL+1);
+        if (STEP_ITERS_FULL == 0)
+        {
+          fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
+        }
+        else
+        {
+          fprintf(stdout,"  DIAGNOSIS: UN-OPTIIZED! This transfer requires multiple steps to \n");
+          fprintf(stdout,"                          be performed. See recommendations below...\n");
+          fprintf(stdout,"  RECOMENDATIONS:\n");
+          fprintf(stdout,"    - Increase the number of DMA threads particpating in the transfer\n");
+          fprintf(stdout,"    - Increase the number of bytes available for outstanding loads\n");
+          if (ALIGNMENT < 16)
+          {
+            fprintf(stdout,"    - Increase element size thereby loading superflous data with the benefit\n");
+            fprintf(stdout,"          of improving guaranteed alignment of pointers\n");
+          }
+        }
+        if (verbose)
+        {
+          PRINT_VAR(NUM_WARPS);
+          PRINT_VAR(SINGLE_WARP);
+          PRINT_VAR(MAX_WARPS_PER_ELMT);
+          PRINT_VAR(MINIMUM_COVER);
+          PRINT_VAR(WARPS_PER_ELMT);
+          PRINT_VAR(LDS_PER_ELMT_PER_THREAD);
+          PRINT_VAR(ELMT_PER_STEP_PER_THREAD);
+          PRINT_VAR(ELMT_PER_STEP_FULL);
+          PRINT_VAR(ROW_ITERS_FULL);
+          PRINT_VAR(HAS_PARTIAL_ELMTS_FULL);
+          PRINT_VAR(HAS_PARTIAL_BYTES_FULL);
+          PRINT_VAR(COL_ITERS_FULL);
+          PRINT_VAR(STEP_ITERS_FULL);
+          PRINT_VAR(ALL_WARPS_ACTIVE);
+          PRINT_VAR(NUM_ACTIVE_WARPS);
+          PRINT_VAR(REMAINING_ELMTS_FULL);
+        }
+      }
+      if (verbose)
+      {
+        PRINT_VAR(MAX_LDS_PER_THREAD);
+        PRINT_VAR(LDS_PER_ELMT);
+        PRINT_VAR(FULL_LDS_PER_ELMT);
+        PRINT_VAR(SPLIT_WARP);
+        PRINT_VAR(BIG_ELMTS);
+        PRINT_VAR(INIT_SRC_STEP_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_DST_STEP_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_SRC_ELMT_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_DST_ELMT_STRIDE(BYTES_PER_ELMT));
+        PRINT_VAR(INIT_INTRA_ELMT_STRIDE);
+        PRINT_VAR(INIT_PARTIAL_OFFSET);
+      }
+      // Now that we're done, switch everything back
+#undef MINIMUM_COVER
+#undef WARPS_PER_ELMT
+#define MINIMUM_COVER ((LDS_PER_ELMT+(WARP_SIZE*MAX_LDS_PER_THREAD)-1)/(WARP_SIZE*MAX_LDS_PER_THREAD))
+#define WARPS_PER_ELMT (BIG_ELMTS ? NUM_WARPS : \
+                        (MINIMUM_COVER > 0) ? MINIMUM_COVER : 1)
+    }
+    fprintf(stdout,"\n\n");
+    fflush(stdout);
+#undef PRINT_VAR
+  }
+};
 
 #define WARP_SPECIALIZED_UNQUALIFIED_METHODS                                                        \
   __device__ __forceinline__ void execute_dma(const int *RESTRICT index_ptr,                        \

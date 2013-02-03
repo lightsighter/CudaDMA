@@ -761,6 +761,7 @@ int main()
   assert(max_offset != -1);
   max_index = max_offset+(PARAM_ELMT_SIZE/sizeof(float));
 
+  CudaDMAIndirect<>::diagnose(PARAM_ALIGNMENT, PARAM_BYTES_PER_THREAD, PARAM_ELMT_SIZE, PARAM_DMA_THREADS, PARAM_NUM_ELMTS, true);
   bool result = true;
   fprintf(stdout,"Running all experiments for ALIGNMENT-%2d OFFSET-%d BYTES_PER_THREAD-%3d ELMT_SIZE-%5d NUM_ELMTS-%5d DMA_WARPS-%2d\n",PARAM_ALIGNMENT,PARAM_OFFSET,PARAM_BYTES_PER_THREAD,PARAM_ELMT_SIZE,PARAM_NUM_ELMTS,PARAM_DMA_THREADS/WARP_SIZE);
   fprintf(stdout,"  Warp-Specialized Experiments\n");

@@ -3234,9 +3234,9 @@ public:
       {
         fprintf(stdout,"  Case: Split Elements - element sizes are sufficiently small that a single\n");
         fprintf(stdout,"                         warp can load multiple elements per step\n");
-        // +1 because the number of steps == 0 in the good case
-        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_SPLIT+1);
-        if (STEP_ITERS_SPLIT == 0)
+        unsigned num_steps = STEP_ITERS_SPLIT+(HAS_PARTIAL_ELMTS_SPLIT ? 1 : 0);
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", num_steps);
+        if (num_steps <= 1)
         {
           fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
         }
@@ -3295,9 +3295,9 @@ public:
         fprintf(stdout,"                        can be loading by %d warps per step.  This means there\n", WARPS_PER_ELMT);
         fprintf(stdout,"                        are a total of %d elements being loaded per step.\n", 
                 ((ELMT_PER_STEP_FULL > NUM_ELMTS) ? NUM_ELMTS : ELMT_PER_STEP_FULL));
-        // +1 because the number of steps == 0 in the good case
-        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_FULL+1);
-        if (STEP_ITERS_FULL == 0)
+        unsigned num_steps = STEP_ITERS_FULL+(HAS_PARTIAL_ELMTS_FULL ? 1 : 0);
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", num_steps);
+        if (num_steps == 0)
         {
           fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
         }
@@ -3363,9 +3363,9 @@ public:
       {
         fprintf(stdout,"  Case: Split Elements - element sizes are sufficiently small that a single\n");
         fprintf(stdout,"                         warp can load multiple elements per step\n");
-        // +1 because the number of steps == 0 in the good case
-        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_SPLIT+1);
-        if (STEP_ITERS_SPLIT == 0)
+        unsigned num_steps = STEP_ITERS_SPLIT+(HAS_PARTIAL_ELMTS_SPLIT ? 1 : 0);
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", num_steps);
+        if (num_steps <= 1)
         {
           fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
         }
@@ -3424,9 +3424,9 @@ public:
         fprintf(stdout,"                        can be loading by %d warps per step.  This means there\n", WARPS_PER_ELMT);
         fprintf(stdout,"                        are a total of %d elements being loaded per step.\n", 
                 ((ELMT_PER_STEP_FULL > NUM_ELMTS) ? NUM_ELMTS : ELMT_PER_STEP_FULL));
-        // +1 because the number of steps == 0 in the good case
-        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_FULL+1);
-        if (STEP_ITERS_FULL == 0)
+        unsigned num_steps = STEP_ITERS_FULL+(HAS_PARTIAL_ELMTS_FULL ? 1 : 0);
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", num_steps);
+        if (num_steps <= 1)
         {
           fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
         }
@@ -9443,9 +9443,9 @@ public:
       {
         fprintf(stdout,"  Case: Split Elements - element sizes are sufficiently small that a single\n");
         fprintf(stdout,"                         warp can load multiple elements per step\n");
-        // +1 because the number of steps == 0 in the good case
-        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_SPLIT+1);
-        if (STEP_ITERS_SPLIT == 0)
+        unsigned num_steps = STEP_ITERS_SPLIT+(HAS_PARTIAL_ELMTS_SPLIT ? 1 : 0);
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", num_steps);
+        if (num_steps <= 1)
         {
           fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
         }
@@ -9504,9 +9504,9 @@ public:
         fprintf(stdout,"                        can be loading by %d warps per step.  This means there\n", WARPS_PER_ELMT);
         fprintf(stdout,"                        are a total of %d elements being loaded per step.\n", 
                 ((ELMT_PER_STEP_FULL > NUM_ELMTS) ? NUM_ELMTS : ELMT_PER_STEP_FULL));
-        // +1 because the number of steps == 0 in the good case
-        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_FULL+1);
-        if (STEP_ITERS_FULL == 0)
+        unsigned num_steps = STEP_ITERS_FULL+(HAS_PARTIAL_ELMTS_FULL ? 1 : 0);
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", num_steps);
+        if (num_steps <= 1)
         {
           fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
         }
@@ -9570,9 +9570,9 @@ public:
       {
         fprintf(stdout,"  Case: Split Elements - element sizes are sufficiently small that a single\n");
         fprintf(stdout,"                         warp can load multiple elements per step\n");
-        // +1 because the number of steps == 0 in the good case
-        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_SPLIT+1);
-        if (STEP_ITERS_SPLIT == 0)
+        unsigned num_steps = STEP_ITERS_SPLIT+(HAS_PARTIAL_ELMTS_SPLIT ? 1 : 0);
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", num_steps);
+        if (num_steps <= 1)
         {
           fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
         }
@@ -9631,9 +9631,9 @@ public:
         fprintf(stdout,"                        can be loading by %d warps per step.  This means there\n", WARPS_PER_ELMT);
         fprintf(stdout,"                        are a total of %d elements being loaded per step.\n", 
                 ((ELMT_PER_STEP_FULL > NUM_ELMTS) ? NUM_ELMTS : ELMT_PER_STEP_FULL));
-        // +1 because the number of steps == 0 in the good case
-        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", STEP_ITERS_FULL+1);
-        if (STEP_ITERS_FULL == 0)
+        unsigned num_steps = STEP_ITERS_FULL+(HAS_PARTIAL_ELMTS_FULL ? 1 : 0);
+        fprintf(stdout,"  TOTAL REQUIRED STEPS: %d\n", num_steps);
+        if (num_steps <= 1)
         {
           fprintf(stdout,"  DIAGNOSIS: OPTIMIZED! This transfer can be performed in a single step.\n");
         }

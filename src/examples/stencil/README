@@ -1,0 +1,39 @@
+/*
+ *  Copyright 2013 NVIDIA Corporation
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
+
+This is an application designed to show how CudaDMA is used to
+implement a variety fo buffering techniques.  The basic idea
+of the application is to compute a 2-D stencil over a three
+dimensional space.  To perform the stencil data, threadblocks
+are assigned an X-Y slice of the three dimensional space.  They
+then walk through the space in the +Z direction.  At each Z-value,
+they compute the stencil.
+
+Performing the stencil requires loading both the main block of
+data as well as the halo data.  The CudaDMAStrided pattern is
+used to perform this transfer.  Users can experiment with the
+parameters of experiment including the size of the space and
+the radius of the stencil by changing the values set in 
+'params_directed.h' and recompiling. 
+
+Note that the default settings for the Makefile target K20.
+CudaDMA version 2.0 currently exercises a correctness bug in
+nvcc when compiling for arch=compute_20.  Also note that 
+performance is severely dependent on the register allocation
+done by nvcc.  If CudaDMA's internal buffers are spilled to
+local memory, performance is severely degraded.  You can see
+whether a kernel is using an local memory in the detailed
+output printed from ptxas.

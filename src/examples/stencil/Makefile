@@ -21,6 +21,7 @@ all: stencil_k20
 
 PTXAS_OPTIONS="-abi=no -v"
 
+# WARNING: this version exercises an nvcc correctness bug!
 stencil:
 	nvcc -o stencil2D -O2 -arch=compute_20 -code=sm_20 -Xptxas $(PTXAS_OPTIONS) cudaDMA_stencil2D.cu
 

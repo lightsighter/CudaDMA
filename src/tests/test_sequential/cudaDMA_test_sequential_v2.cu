@@ -65,7 +65,7 @@ special_xfer_three( float *idata, float *odata, int buffer_size, int num_compute
     if (single)
     {
       if (qualified)
-        dma0.template execute_dma<true,LOAD_CACHE_GLOBAL,STORE_CACHE_GLOBAL>(base_ptr, &(buffer[ALIGN_OFFSET])); 
+        dma0.template execute_dma<true/*,LOAD_CACHE_GLOBAL,STORE_CACHE_GLOBAL*/>(base_ptr, &(buffer[ALIGN_OFFSET])); 
       else
         dma0.execute_dma(base_ptr, &(buffer[ALIGN_OFFSET]));
     }
@@ -73,8 +73,8 @@ special_xfer_three( float *idata, float *odata, int buffer_size, int num_compute
     {
       if (qualified)
       {
-        dma0.template start_xfer_async<true,LOAD_CACHE_GLOBAL,STORE_CACHE_STREAMING>(base_ptr);
-        dma0.template wait_xfer_finish<true,LOAD_CACHE_GLOBAL,STORE_CACHE_STREAMING>(&(buffer[ALIGN_OFFSET]));
+        dma0.template start_xfer_async<true/*,LOAD_CACHE_GLOBAL,STORE_CACHE_STREAMING*/>(base_ptr);
+        dma0.template wait_xfer_finish<true/*,LOAD_CACHE_GLOBAL,STORE_CACHE_STREAMING*/>(&(buffer[ALIGN_OFFSET]));
       }
       else
       {
@@ -99,6 +99,8 @@ special_xfer_three( float *idata, float *odata, int buffer_size, int num_compute
     dma0.wait_for_dma_finish();
     // Now read the buffer out of shared and write the results back
     index = threadIdx.x;
+    //if (threadIdx.x == 1)
+    //  printf("Value 1 read is %f\n", buffer[1]);
     for (int i=0; i<iters; i++)
     {
             float res = buffer[index];
@@ -490,8 +492,8 @@ __host__ bool run_experiment(bool single, bool qualified, int num_templates)
   default:
     assert(false);
   }
-
-  CUDA_SAFE_CALL(cudaThreadSynchronize());
+  CUDA_SAFE_CALL(cudaGetLastError());
+  CUDA_SAFE_CALL(cudaDeviceSynchronize());
 
   CUDA_SAFE_CALL(cudaMemcpy(h_odata, d_odata, output_size*sizeof(float), cudaMemcpyDeviceToHost));
 

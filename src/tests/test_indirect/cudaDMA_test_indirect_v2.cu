@@ -651,6 +651,7 @@ __host__ bool run_experiment(bool single, bool qualified, int num_templates)
 		assert(false);
 		break;
 	}
+        CUDA_SAFE_CALL( cudaGetLastError());
         CUDA_SAFE_CALL( cudaThreadSynchronize());
 
         CUDA_SAFE_CALL( cudaMemcpy (h_odata, d_odata, output_size*sizeof(float), cudaMemcpyDeviceToHost));

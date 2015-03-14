@@ -21,9 +21,10 @@
         <!-- <p class="view"><a href="https://github.com/lightsighter/CudaDMA">View the Project on GitHub <small>lightsighter/CudaDMA</small></a></p> -->
 
         <ul>
+          <li><a href="https://github.com/lightsighter/CudaDMA">View On <strong>GitHub</strong></a></li>
+
           <li><a href="https://github.com/lightsighter/CudaDMA/zipball/master">Download <strong>ZIP File</strong></a></li>
           <li><a href="https://github.com/lightsighter/CudaDMA/tarball/master">Download <strong>TAR Ball</strong></a></li>
-          <li><a href="https://github.com/lightsighter/CudaDMA">View On <strong>GitHub</strong></a></li>
         </ul>
         <p><a href="sc11.pdf">Supercomputing 2011 Paper</a></p>
         <p><a href="overview.html">Overview</a></p>
@@ -55,6 +56,27 @@
 <a id="important-note" class="anchor" href="#important-note" aria-hidden="true"><span class="octicon octicon-link"></span></a>Important Note</h2>
 
 <p>CudaDMA will only be supported through the Kepler architecture.  NVIDIA is considering adopting CudaDMA as a supported CUDA library if there is sufficient interest.  Please contact us if you're interested in continuing to use CudaDMA in the future.</p>
+
+<h2>
+<a id="cudadma-api" class="anchor" href="#cudadma-api" aria-hidden="true"><span class="octicon octicon-link"></span></a>CudaDMA API</h2>
+
+<p>The CudaDMA API currently supports two implementations: the original version that was written for Fermi, and a new version that has additional features for targeting Kepler but is also backwards compatible with Fermi.</p>
+
+<p><a href="model.html">CudaDMA Version 1.0</a> (Fermi) contained in include/cudaDMA.h in the git repository.</p>
+
+<p><a href="two.html">CudaDMA Version 2.0</a> (Kepler+Fermi) contained in include/cudaDMAv2.h in the git repository.</p>
+
+<h2>
+<a id="announcements" class="anchor" href="#announcements" aria-hidden="true"><span class="octicon octicon-link"></span></a>Announcements</h2>
+
+<ul>
+  <li>February 2013 - <a href="two.html">CudaDMA Version 2.0</a> is now available.</li>
+  <li>January 2013 - Final versions of CudaDMA instances tuned for Kepler will be finished by early February. The new instances will allow users to control the number of outstanding LDGs in flight on the K20 architecture. They also contain optional knobs for controlling caching effects on loads and stores. As before, all instances will support execution both with and without warp-specialization.</li>
+  <li>October 2012 - We've begun work on new CudaDMA instances tuned for the Kepler architecture. The new instances will make use of the ldg intrinsic for supporting many more outstanding loads in flight by issuing them through the texture cache. Work is ongoing but you can see observe our progress in the new cudaDMAK.h file (K for Kepler).</li>
+  <li>May 2012 - We've modified the implementation of the CudaDMAIndirect pattern so that different offsets can be supplied for each invocation of the execute_dma call for the same CudaDMA object. Indexing for CudaDMAIndirect has also been made element-based instead of byte-based for easier use.</li>
+  <li>November 2011 - Based on feedback from users of CudaDMA at Supercomputing we have added additional support for using CudaDMA without warp specialization. All CudaDMA instances are now parameterized by a boolean template parameter indicating whether a CudaDMA object is being used in conjunction with warp-specialization or not. If warp specialization is not being employed, a simpler set of constructors are provided.</li>
+  <li>Slides from the CudaDMA technical talk at Supercomputing 2011 can be found <a href="slides.pdf">here</a>.</li>
+</ul>
 
 <h2>
 <a id="contributors" class="anchor" href="#contributors" aria-hidden="true"><span class="octicon octicon-link"></span></a>Contributors</h2>

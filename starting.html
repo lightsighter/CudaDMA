@@ -90,7 +90,7 @@ $ git clone https://github.com/lightsighter/CudaDMA.git
 
 <p>The kernel for performing saxpy with CudaDMA can be seen below.</p>
 
-<pre><code>
+<pre><code class="language-cpp">
 __global__
 void saxpy_cudaDMA(float *y, float *x, float a) {
   __shared__ float sdata_x[NUM_COMPUTE_THREADS];

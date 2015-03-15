@@ -40,6 +40,7 @@
         <p><a href="starting.html">Getting Started</a></p>
         <p><a href="model.html">Programming Model</a></p>
         <p><a href="object.html">CudaDMA Object API</a></p>
+        <p><a href="two.html">Version 2.0</a></p>
         <p><a href="sequential.html">CudaDMA Sequential</a></p>
         <p><a href="strided.html">CudaDMA Strided</a></p>
         <p><a href="indirect.html">CudaDMA Indirect</a></p>
@@ -52,7 +53,6 @@
         <p><small>Theme by <a href="https://github.com/orderedlist">orderedlist</a></small></p>
       </footer>
       <section>
-
 <h1>
 <a id="object-api" class="anchor" href="#object-api" aria-hidden="true"><span class="octicon octicon-link"></span></a>CudaDMA Object API</h1>
 
@@ -80,12 +80,13 @@ public:
 public:
   // Compute thread synchronization functions
   __device__ void start_async_dma();
-  __device__ void wait_for_dma_start();
+  __device__ void wait_for_dma_finish();
 public:
   // DMA thread synchronization functions
-  __device__ void wait_for_dma_finish();
+  __device__ void wait_for_dma_start();
   __device__ void finish_async_dma();
 public:
+  // DMA thread transfer operations
   __device__ void execute_dma(void *src_ptr,
                               void *dst_ptr) const;
   __device__ void execute_dma_no_sync(void *src_ptr,

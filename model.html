@@ -69,7 +69,7 @@ void cuda_dma_example_kernel(float *g_data) {
 
   if (dma_ld.owns_this_thread()) {
     // DMA warps
-    for (int i=0; i<NUM_ITERS; i++) {
+    for (int i=0; i&lt;NUM_ITERS; i++) {
       // Contains internal synchronization
       // wait_for_dma_start
       // Load data from global to shared
@@ -78,7 +78,7 @@ void cuda_dma_example_kernel(float *g_data) {
     }
   } else {
     // Compute warps
-    for (int i=0; i<NUM_ITERS; i++) {
+    for (int i=0; i&lt;NUM_ITERS; i++) {
       dma_ld.start_async_dma();
       // Do any extra work
       dma_ld.wait_for_dma_finish();
@@ -113,7 +113,7 @@ void cuda_dma_kernel_no_dma_warps(float *g_data) {
   // CudaDMA object to manage buffer
   cudaDMA dma_ld(0,NUM_THREADS, NUM_THREADS,0);
 
-  for (int i=0; i<NUM_ITERS; i++) {
+  for (int i=0; i&lt;NUM_ITERS; i++) {
     dma_ld.execute_dma_no_sync(g_data,buffer);
     __syncthreads();
     process_buffer(buffer);

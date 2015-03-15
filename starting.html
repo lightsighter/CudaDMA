@@ -105,13 +105,13 @@ void saxpy_cudaDMA(float *y, float *x, float a) {
  if (dma_ld_x.owns_this_thread()) {
     // DMA threads for loading data for x vector
     // Iterate over the elements for a block
-    for (int i = 0; i<(ELMT_PER_BLOCK/NUM_COMPUTE_THREADS); i++) {
+    for (int i = 0; i&lt;(ELMT_PER_BLOCK/NUM_COMPUTE_THREADS); i++) {
       int idx = blockIdx.x*ELMT_PER_BLOCK + i*NUM_COMPUTE_THREADS;
       dma_ld_x.execute_dma(&x[idx], sdata_x);
     }
   } else if (dma_ld_y.owns_this_thread()) {
      // DMA threads for loading data for y vector
-     for (int i = 0; i<(ELMT_PER_BLOCK/NUM_COMPUTE_THREADS); i++) {
+     for (int i = 0; i&lt;(ELMT_PER_BLOCK/NUM_COMPUTE_THREADS); i++) {
        int idx = blockIdx.x*ELMT_PER_BLOCK + i*NUM_COMPUTE_THREADS;
        dma_ld_y.execute_dma(&y[idx], sdata_y);
      }
@@ -122,7 +122,7 @@ void saxpy_cudaDMA(float *y, float *x, float a) {
     // Preamble (start DMA operations}
     dma_ld_x.start_async_dma();
     dma_ld_y.start_async_dma();
-    for (i = 0; i<(ELMT_PER_BLOCK/NUM_COMPUTE_THREADS-1); i++) {
+    for (i = 0; i&lt;(ELMT_PER_BLOCK/NUM_COMPUTE_THREADS-1); i++) {
       // Get the x value from the shared buffer and start the next load
       dma_ld_x.wait_for_dma_finish();
       tmp_x = sdata_x[threadIdx.x];

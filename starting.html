@@ -96,11 +96,14 @@ void saxpy_cudaDMA(float *y, float *x, float a) {
   __shared__ float sdata_y[NUM_COMPUTE_THREADS];
 
   // DMA object for loading buffer for x data
-  cudaDMASequential<16, NUM_COMPUTE_THREADS*sizeof(float), DMA_THREADS_PER_LD>
+  cudaDMASequential<16, NUM_COMPUTE_THREADS*sizeof(float), 
+                    DMA_THREADS_PER_LD>
     dma_ld_x(0, NUM_COMPUTE_THREADS, NUM_COMPUTE_THREADS);
   // DMA objects for loading buffer for y data
-  cudaDMASequential<16, NUM_COMPUTE_THREADS*sizeof(float), DMA_THREADS_PER_LD>
-    dma_ld_y(1, NUM_COMPUTE_THREADS, NUM_COMPUTE_THREADS+DMA_THREADS_PER_LD);
+  cudaDMASequential<16, NUM_COMPUTE_THREADS*sizeof(float), 
+                    DMA_THREADS_PER_LD>
+    dma_ld_y(1, NUM_COMPUTE_THREADS, 
+             NUM_COMPUTE_THREADS+DMA_THREADS_PER_LD);
 
  if (dma_ld_x.owns_this_thread()) {
     // DMA threads for loading data for x vector
@@ -132,7 +135,8 @@ void saxpy_cudaDMA(float *y, float *x, float a) {
       tmp_y = sdata_y[threadIdx.x];
       dma_ld_y.start_async_dma();
       // Perform the computation
-      int idx = blockIdx.x*ELMT_PER_BLOCK + i*NUM_COMPUTE_THREADS + threadIdx.x;
+      int idx = blockIdx.x*ELMT_PER_BLOCK + 
+                i*NUM_COMPUTE_THREADS + threadIdx.x;
       y[idx] = a * tmp_x + tmp_y;
     }
     // Postamble (last iteration)
@@ -140,7 +144,8 @@ void saxpy_cudaDMA(float *y, float *x, float a) {
     tmp_x = sdata_x[threadIdx.x];
     dma_ld_y.wait_for_dma_finish();
     tmp_y = sdata_y[threadIdx.x];
-    int idx = blockIdx.x*ELMT_PER_BLOCK + i*NUM_COMPUTE_THREADS + threadIdx.x;
+    int idx = blockIdx.x*ELMT_PER_BLOCK + 
+              i*NUM_COMPUTE_THREADS + threadIdx.x;
     y[idx] = a * tmp_x + tmp_y;
   }
 }

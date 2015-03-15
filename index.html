@@ -14,6 +14,15 @@
     <![endif]-->
   </head>
   <body>
+    <script type="text/javascript">
+      function create_mail(naam, domain, term, label) {
+        var result;
+        result += '<a href="' + 'ma' + 'il' + 'to:' + naam;
+        result += '@' + domain + '.' + term;
+        result += '">' + label + '<' + '/a>';
+        document.write(result);
+      }
+    </script>
     <div class="wrapper">
       <header>
         <a href="index.html"><h1 class="title"><img width=45px" src="logo.jpg">&nbsp&nbspCudaDMA</h1></a>
@@ -99,15 +108,6 @@
             pageTracker._trackPageview();
             } catch(err) {}
           </script>
-    <script src="javascripts/prism.js"></script>
-    <script type="text/javascript">
-      function create_mail(naam, domain, term, label) {
-        var result;
-        result += '<a href="' + 'ma' + 'il' + 'to:' + naam;
-        result += '@' + domain + '.' + term;
-        result += '">' + label + '<' + '/a>';
-        document.write(result);
-      }
-    </script>
+    <script src="javascripts/prism.js"></script> 
   </body>
 </html>

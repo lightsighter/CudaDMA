@@ -62,7 +62,7 @@
 __global__
 void cuda_dma_example_kernel(float *g_data) {
   // Global buffer
-  __shrared__ float buffer[NUM_ELMTS];
+  __shared__ float buffer[NUM_ELMTS];
   // CudaDMA object
   cudaDMA dma_ld<true/*warp specialization*/>
     (0,NUM_DMA_THREADS,NUM_COMPUTE_THREADS, NUM_COMPUTE_THREADS);

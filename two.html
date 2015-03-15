@@ -90,7 +90,8 @@ class CudaDMA {
 public:
   // Old version: still available
   __device__ void execute_dma(const void *src, void *dst);
-  // New version: uses LDGs if GLOBAL_LOAD is true and compiling for compute_35
+  // New version: uses LDGs if GLOBAL_LOAD is true 
+  // and compiling for compute_35
   template<bool GLOBAL_LOAD>
   __device__ void execute_dma(const void *src, void *dst);
 };
@@ -178,17 +179,18 @@ CudaDMAIndirect<>::diagnose(...);
 //    - DMA THREADS         416
 //    - FULLY TEMPLATED     true
 
-//  Case: Full Elements - element sizes are sufficiently small that 1 elements
-//                        can be loading by 4 warps per step.  This means there
-//                        are a total of 3 elements being loaded per step.
+//  Case: Full Elements - element sizes are sufficiently small that 
+//                        1 elements can be loading by 4 warps per 
+//                        step.  This means there are a total of 3 
+//                        elements being loaded per step.
 //  TOTAL REQUIRED STEPS: 11
 //  DIAGNOSIS: UN-OPTIIZED! This transfer requires multiple steps to 
 //                          be performed. See recommendations below...
 //  RECOMENDATIONS:
 //    - Increase the number of DMA threads particpating in the transfer
 //    - Increase the number of bytes available for outstanding loads
-//    - Increase element size thereby loading superflous data with the benefit
-//          of improving guaranteed alignment of pointers
+//    - Increase element size thereby loading superflous data with the 
+//      benefit of improving guaranteed alignment of pointers
 </code></pre>
 
 <h2>

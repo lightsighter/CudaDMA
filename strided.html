@@ -167,7 +167,7 @@ public:
 
   template&ltbool GLOBAL_LOAD, CudaDMALoadQualifier LOAD_QUAL, 
            CudaDMAStoreQual STORE_QUAL&gt
-  __device_ void wait_xfer_finish(void *dst_ptr);
+  __device__ void wait_xfer_finish(void *dst_ptr);
 };
 </code></pre>
 

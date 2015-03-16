@@ -181,10 +181,11 @@ template<...>
 class CudaDMAStrided
 {
 public:
-  __host__
-  static void diagnose(int alignment, int bytes_per_thread, int bytes_per_elmt,
-                       int num_dma_threads, int num_elements, 
-                       bool fully_templated, bool verbose = false);
+  __host__ static 
+  void diagnose(int alignment, int bytes_per_thread, 
+                int bytes_per_elmt, int num_dma_threads, 
+                int num_elements, bool fully_templated, 
+                bool verbose = false);
 };
 
 // Example invocation

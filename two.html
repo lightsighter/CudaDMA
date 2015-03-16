@@ -92,7 +92,7 @@ public:
   __device__ void execute_dma(const void *src, void *dst);
   // New version: uses LDGs if GLOBAL_LOAD is true 
   // and compiling for compute_35
-  template<bool GLOBAL_LOAD>
+  template&ltbool GLOBAL_LOAD&gt
   __device__ void execute_dma(const void *src, void *dst);
 };
 </code></pre>
@@ -111,15 +111,15 @@ class CudaDMA {
 public:
   // Transfer functions supported by all CudaDMA instances
   __device__ void start_xfer_async(const void *src_ptr);
-  template<bool GLOBAL_LOAD>
+  template&ltbool GLOBAL_LOAD&gt
   __device__ void start_xfer_async(const void *src_ptr);
 public:
   __device__ void wait_xfer_finish(void *dst_ptr);
-  template<bool GLOBAL_LOAD>
+  template&ltbool GLOBAL_LOAD&gt
   __device__ void wait_xfer_finish(void *dst_ptr);
 public:
   __device__ void execute_dma(const void *src_ptr, void *dst_ptr);
-  template<bool GLOBAL_LOAD>
+  template&ltbool GLOBAL_LOAD&gt
   __device__ void execute_dma(const void *src_ptr, void *dst_ptr);
 };
 </code></pre>
@@ -157,9 +157,9 @@ public:
 };
 
 // Invocation: note assume default template arguments
-CudaDMASequential<>::diagnose(...);
-CudaDMAStrided<>::diagnose(...);
-CudaDMAIndirect<>::diagnose(...);
+CudaDMASequential&lt&gt::diagnose(...);
+CudaDMAStrided&lt&gt::diagnose(...);
+CudaDMAIndirect&lt&gt::diagnose(...);
 </code></pre>
 
 <p>All the arguments that impact performance are passed. The <tt>fully_templated</tt> parameter indicates whether as many arguments as possible are being passed as templates or not. The diagnose functions print to stdout and tell whether the transfers can be completed in a single pass. If the transfers can't be done in a single pass, suggestions are given for improving performance. An example output from a CudaDMAStrided instance is shown below:</p>
@@ -229,11 +229,14 @@ enum CudaDMAStoreQualifier {
 
 class CudaDMA {
 public:  // Additional versions of CudaDMA transfer functions
-  template<bool GLOBAL_LOAD, CudaDMALoadQualifier LOAD_QUAL, CudaDMAStoreQualifer STORE_QUAL>
+  template&ltbool GLOBAL_LOAD, CudaDMALoadQualifier LOAD_QUAL, 
+           CudaDMAStoreQualifer STORE_QUAL&gt
   __device__ void start_xfer_async(const void *src_ptr);
-  template<bool GLOBAL_LOAD, CudaDMALoadQualifier LOAD_QUAL, CudaDMAStoreQualifer STORE_QUAL>
+  template&ltbool GLOBAL_LOAD, CudaDMALoadQualifier LOAD_QUAL, 
+           CudaDMAStoreQualifer STORE_QUAL&gt
   __device__ void wait_xfer_finish(void *dst_ptr);
-  template<bool GLOBAL_LOAD, CudaDMALoadQualifier LOAD_QUAL, CudaDMAStoreQualifer STORE_QUAL>
+  template&ltbool GLOBAL_LOAD, CudaDMALoadQualifier LOAD_QUAL, 
+           CudaDMAStoreQualifer STORE_QUAL&gt
   __device__ void execute_dma(const void *src_ptr, void *dst_ptr);
 };
 </code></pre>

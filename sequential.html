@@ -57,10 +57,150 @@
 <h1>
 <a id="version-two" class="anchor" href="#version-two" aria-hidden="true"><span class="octicon octicon-link"></span></a>CudaDMASequential Version 2.0</h1>
 
+<p>CudaDMASequential <a href="two.html">Version 2.0</a> has the same semantics and is characterized by the same parameters as the original <a href="#version-one">CudaDMASequential</a>.</p>
+
+<h2>
+<a id="constructors-two" class="anchor" href="#constructors-two" aria-hidden="true"><span class="octicon octicon-link"></span></a>Constructors</h2>
+
+<p>From 3-5 template parameters are supported for the new CudaDMASequential transfer pattern. All constructors support the new option for specifying the number of <tt>BYTES_PER_THREAD</tt> for outstanding LDG loads. The value of <tt>BYTES_PER_THREAD</tt> must be a multiple of <tt>ALIGNMENT</tt>. By selecting <tt>4*ALIGNMENT</tt> the implementation will default to the Fermi implementation.</p>
+
+<pre><code class="language-cuda">
+/*************************************************/
+/* Constructors for use with warp-specialization */
+CudaDMASequential&lttrue/*specialized*/, ALIGNMENT, BYTES_PER_THREAD, 
+                  XFER_SIZE, DMA_THREADS&gt
+  (dmaID, num_compute_threads, dma_threadIdx_start);
+
+CudaDMASequential&lttrue, ALIGNMENT, BYTES_PER_THREAD, XFER_SIZE&gt
+  (dmaID, num_dma_threads, num_compute_threads, dma_threadIdx_start);
+
+CudaDMASequential&lttrue, ALIGNMENT, BYTES_PER_THREAD&gt
+  (dmaID, num_dma_threads, num_compute_threads, 
+   dma_threadIdx_start, xfer_size);
+
+/****************************************************/
+/* Constructors for use without warp-specialization */
+CudaDMASequential&ltfalse/*not specialized*/, ALIGNMENT, BYTES_PER_THREAD, 
+                  XFER_SIZE, DMA_THREADS&gt
+  (dma_threadIdx_start/*optional*/);
+
+CudaDMASequential&ltfalse, ALIGNMENT, BYTES_PER_THREAD, XFER_SIZE&gt
+  (num_dma_threads/*optional*/, dma_threadIdx_start/*optional*/);
+
+CudaDMASequential&ltfalse, ALIGNMENT, BYTES_PER_THREAD&gt
+  (xfer_size, num_dma_threads/*optional*/, dma_threadIdx_start/*optional*/);
+</code></pre>
+
+<p>Unlike previous versions of CudaDMA, the non-warp-specialized implementations also allow you to specify that a subset of the available warps should be used. These are optional parameters. Not specifying them will default to using all the threads in a threadblock for the transfer.</p>
+
+<h2>
+<a id="transfer-two" class="anchor" href="#transfer-two" aria-hidden="true"><span class="octicon octicon-link"></span></a>Transfer Functions</h2>
+
+<p>CudaDMASequential supports the following transfer functions.</p>
+
+<pre><code class="language-cuda">
+class CudaDMASequential {
+public:
+  // One-Phase Versions
+  __device__ void execute_dma(const void *src_ptr, void *dst_ptr);
+
+  template&ltbool GLOBAL_LOAD&gt
+  __device__ void execute_dma(const void *src_ptr, void *dst_ptr);
+
+  template&ltbool GLOBAL_LOAD, CudaDMALoadQualifier LOAD_QUAL, 
+           CudaDMAStoreQual STORE_QUAL&gt
+  __device__ void execute_dma(const void *src_ptr, void *dst_ptr);
+
+  // Two-Phase Versions
+  __device__ void start_xfer_async(const void *src_ptr);
+
+  template&ltbool GLOBAL_LOAD&gt
+  __device__ void start_xfer_async(const void *src_ptr);
+
+  template&ltbool GLOBAL_LOAD, CudaDMALoadQualifier LOAD_QUAL, 
+           CudaDMAStoreQual STORE_QUAL&gt
+  __device__ void start_xfer_async(const void *src_ptr);
+
+  __device__ void wait_xfer_finish(void *dst_ptr);
+
+  template&ltbool GLOBAL_LOAD&gt
+  __device__ void wait_xfer_finish(void *dst_ptr);
+
+  template&ltbool GLOBAL_LOAD, CudaDMALoadQualifier LOAD_QUAL, 
+           CudaDMAStoreQual STORE_QUAL&gt
+  __device__ void wait_xfer_finish(void *dst_ptr);
+};
+</code></pre>
+
+<h2>
+<a id="diagnostic-two" class="anchor" href="#diagnostic-two" aria-hidden="true"><span class="octicon octicon-link"></span></a>Diagnostic Functions</h2>
+
+<p>CudaDMASequential implements the following host-side diagnostic function. It should be invoked with no template parameters.</p>
+
+<pre><code class="language-cuda">
+template&lt...&gt
+class CudaDMASequential
+{
+public:
+  __host__
+  static void diagnose(int alignment, int bytes_per_thread, 
+                       int bytes_per_elmt, int num_dma_threads, 
+                       bool fully_templated, bool verbose = false);
+};
+
+// Example invocation
+CudaDMASequential&lt...&gt::(/*arguments*/);
+</code></pre>
+
 <h1>
 <a id="version-one" class="anchor" href="#version-one" aria-hidden="true"><span class="octicon octicon-link"></span></a>CudaDMASequential Version 1.0</h1>
 
+<h2>
+<a id="pattern-one" class="anchor" href="#pattern-one" aria-hidden="true"><span class="octicon octicon-link"></span></a>Pattern Description</h2>
 
+<p>The CudaDMASequential transfer pattern is used for transferring a contiguous block of memory. There are only two parameters required to characterize a sequential transfer pattern.</p>
+
+<ul>
+  <li><tt>ALIGNMENT</tt> - the alignment of the block of memory (e.g. 4-, 8-, or 16-byte alignment)</li>
+  <li><tt>XFER_SIZE</tt> - the size of the block of memory to be transferred in bytes</li>
+</ul>
+
+<h2>
+<a id="constructors-one" class="anchor" href="#constructors-one" aria-hidden="true"><span class="octicon octicon-link"></span></a>Constructors</h2>
+
+<p>There are three constructors for the CudaDMASequential transfer pattern. Different constructors all describe the same sequential transfer pattern, but allow for different parameters to be supplied as compile-time constants via template parameters. Below are models for invoking the three constructors for CudaDMASequential.</p>
+
+<pre><code class="language-cuda">
+/* Constructors for use with warp specialization */
+cudaDMASequential&lttrue/*specialized*/, ALIGNMENT,
+                  XFER_SIZE, DMA_THREADS&gt
+  (dmaID, num_compute_threads, dma_threadIdx_start);
+
+cudaDMASequential&lttrue,ALIGNMENT,XFER_SIZE&gt
+  (dmaID, num_dma_threads, num_compute_threads, dma_threadIdx_start);
+
+cudaDMASequential&lttrue,ALIGNMENT&gt
+  (dmaID, num_dma_threads, num_compute_threads, dma_threadIdx_start, xfer_size);
+
+/* Constructors for use without warp specialization */
+cudaDMASequential&ltfalse/*not specialized*/,ALIGNMENT,XFER_SIZE,TOTAL_THREADS&gt
+  ();
+
+cudaDMASequential&ltfalse,ALIGNMENT,XFER_SIZE&gt
+  ();
+
+cudaDMASequential&ltfalse,ALIGNMENT&gt
+  (xfer_size);
+</code></pre>
+
+<p>The first constructor allows the user to supply the most number of compile-time constants as template parameters. The user can specify the <tt>ALIGNMENT</tt>, <tt>XFER_SIZE</tt> and the number of <tt>DMA_THREADS</tt> as compile-time constants. The second constructor keeps <tt>XFER_SIZE</tt> as a compile time constant, while making the number of DMA threads a dynamic parameter. The last constructor moves the transfer size parameter to being a dynamic parameter as well. All other parameters are base parameters required by the <a href="object.html">CudaDMA API</a>.</p>
+
+<p>For the non-warp-specialized constructors, the total threads parameter indicates to the CudaDMA object how many threads should be used to perform the transfer. For the cases where total threads is not specified as a compile-time constant, we use <tt>blockDim.x</tt> as the number of threads to perform the transfer.</p>
+
+<h2>
+<a id="performance-one" class="anchor" href="#performance-one" aria-hidden="true"><span class="octicon octicon-link"></span></a>Performance Considerations</h2>
+
+<p>Supplying as many parameters as possible as compile-time constants will contribute the most to achieving high performance with CudaDMASequential. In addition to supplying compile-time constants, performance can also be achieved by aligning data to the largest byte-alignment possible. 16-byte alignment will perform better than 8-byte alignment, and 8-byte alignment will perform better than 4-byte alignment.</p>
 
       </section> 
     </div>

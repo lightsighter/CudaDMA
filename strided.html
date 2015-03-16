@@ -275,7 +275,7 @@ cudaDMAStrided&ltfalse, ALIGNMENT&gt
    src_stride); // dst_stride == BYTES_PER_ELMT
 </code></pre>
 
-<p>Each constructor takes the base set of CudaDMA object arguments required by the CudaDMA API. In addition, each constructor takes the set of arguments required to fully characterize the CudaDMAStrided transfer pattern.</p>
+<p>Each constructor takes the base set of CudaDMA object arguments required by the <a href="object.html">CudaDMA API</a>. In addition, each constructor takes the set of arguments required to fully characterize the CudaDMAStrided transfer pattern.</p>
 
 <p>For the non-warp-specialized constructors, the total threads parameter describes the total number of threads to be used to perform the transfer. In the cases where total threads is not supplied as a compile-time constant, the number of threads defaults to <tt>blockDim.x</tt>. This is only true for the non-warp-specialized case.</p>
 

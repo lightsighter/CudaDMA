@@ -45,6 +45,51 @@
       </footer>
       <section>
 
+<h1>
+<a id="restrictions" class="anchor" href="#restrictions" aria-hidden="true"><span class="octicon octicon-link"></span></a>Restrictions</h1>
+
+<h2>
+<a id="one-dimension" class="anchor" href="#one-dimension" aria-hidden="true"><span class="octicon octicon-link"></span></a>One Dimensional Threadblocks</h2>
+
+<p>The CudaDMA interface currently assumes that all threadblocks are one dimensional in the x-dimension (i.e. <tt>blockDim.y==1</tt> and <tt>blockDim.z==1</tt>). This restriction is because it is easier to separate DMA warps from compute warps in only one dimension. Note that this doesn't preclude launching multi-dimensional grids of threadblocks, only that each threadblock enumerate its threads in the x-dimension.</p>
+
+<h2>
+<a id="explicit-warps" class="anchor" href="#explicit-warps" aria-hidden="true"><span class="octicon octicon-link"></span></a>Explicit DMA Warps</h2>
+
+<p>Explicit DMA warps are only supported on devices of compute capability 2.0. The reason for this is that the fine-grained synchronization primitives used for supporting CudaDMA are only implemented on Fermi devices.</p>
+
+<h2>
+<a id="barrier-granularity" class="anchor" href="#barrier-granularity" aria-hidden="true"><span class="octicon octicon-link"></span></a>Barrier Granularity</h2>
+
+<p>Barriers on current CUDA devices only support performing barriers at warp granularity. Therefore each CudaDMA object must be given a number of threads that is an integer multiple of <tt>warpSize</tt> (currently 32 on all CUDA devices).</p>
+
+<h2>
+<a id="syncthreads" class="anchor" href="#syncthreads" aria-hidden="true"><span class="octicon octicon-link"></span></a>Use of <tt>__syncthreads</tt></h2>
+
+<p>The <tt>__syncthreads</tt> primitive is not explicitly invalidated by using CudaDMA code, but programmers should be cautious in combining the two. Each CudaDMA object is given an ID that specifies the two named barriers used by that particular object (as described in the <a href="object.html">CudaDMA API</a>). If a CudaDMA object is given ID 0, then it will use named barriers 0 and 1. However, the <tt>__syncthreads</tt> primitive implicitly uses named barrier 0 and could result in barrier aliasing and undefined behavior. Therefore when using <tt>__syncthreads</tt> we recommend numbering CudaDMA objects starting at ID 1. Note also that it is still possible to cause deadlock by using <tt>__syncthreads</tt> in conjunction with CudaDMA.</p>
+
+<p>It is still possible to simulate the effect of <tt>__syncthreads</tt> in either a compute or a DMA warp section of code using an internal CudaDMA function. Included in the cudaDMA.h header file is the following function:</p>
+
+<pre><code class="language-cuda">
+__device__ void ptx_cudaDMA_barrier_blocking(const int name, 
+                                             const int num_threads);
+</code></pre>
+
+<p>This device allows the programmer to barrier a subset of the threads in a threadblock. The first parameter is the number indicating which named barrier should be used. Ideally this barrier should be different than any of the barriers used by the CudaDMA objects to avoid aliasing and deadlocks. However, a deep understanding of the CudaDMA barrier protocol may allow re-use of barriers. The second parameter indicates the number of threads that have to hit the barrier before it is completed. This should be the number of DMA threads or compute threads in the if-else block of code.</p>
+
+<p>It should be noted that the primarily use of this call is when shared memory buffers are used for multiple purposes by the compute threads. We have yet to find a reason to barrier DMA threads independent of the CudaDMA functions that make use of named barriers.</p>
+
+<h2>
+<a id="maximum-buffers" class="anchor" href="#maximum-buffers" aria-hidden="true"><span class="octicon octicon-link"></span></a>Maximum Named Barriers</h2>
+
+<p>Every streaming multiprocessor (SM) on a CUDA device has fixed resources such as the amount of shared memory and registers that it contains. The number of named barriers on a device is also a constrained resource. There are up to 16 named barriers on an SM. Therefore the maximum number of CudaDMA objects in a kernel is 8 since each CudaDMA object requires two named barriers.</p>
+
+<p>In addition to this restriction, note that it's possible for named barrier usage to reduce the maximum occupancy of a kernel. Using many CudaDMA objects in a kernel and consequently multiple named barriers can lower the maximum number of threadblocks placed on an SM.</p>
+
+<h2>
+<a id="loop-unrolling" class="anchor" href="#loop-unrolling" aria-hidden="true"><span class="octicon octicon-link"></span></a>Loop Unrolling</h2>
+
+<p>The <tt>nvcc</tt> compiler currently supports pragmas that enable loop unrolling. However, this feature is currently not supported when the loop contains inlined PTX code, even code inside of function calls in loops (i.e. CudaDMA synchronization calls). We have not noticed any significant performance degradation from this, but are working with the CUDA compiler team to address it.</p>
       </section> 
     </div>
     <script src="javascripts/scale.fix.js"></script>

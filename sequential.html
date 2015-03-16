@@ -88,7 +88,8 @@ CudaDMASequential&ltfalse, ALIGNMENT, BYTES_PER_THREAD, XFER_SIZE&gt
   (num_dma_threads/*optional*/, dma_threadIdx_start/*optional*/);
 
 CudaDMASequential&ltfalse, ALIGNMENT, BYTES_PER_THREAD&gt
-  (xfer_size, num_dma_threads/*optional*/, dma_threadIdx_start/*optional*/);
+  (xfer_size, num_dma_threads/*optional*/, 
+   dma_threadIdx_start/*optional*/);
 </code></pre>
 
 <p>Unlike previous versions of CudaDMA, the non-warp-specialized implementations also allow you to specify that a subset of the available warps should be used. These are optional parameters. Not specifying them will default to using all the threads in a threadblock for the transfer.</p>
@@ -180,10 +181,12 @@ cudaDMASequential&lttrue,ALIGNMENT,XFER_SIZE&gt
   (dmaID, num_dma_threads, num_compute_threads, dma_threadIdx_start);
 
 cudaDMASequential&lttrue,ALIGNMENT&gt
-  (dmaID, num_dma_threads, num_compute_threads, dma_threadIdx_start, xfer_size);
+  (dmaID, num_dma_threads, num_compute_threads, 
+   dma_threadIdx_start, xfer_size);
 
 /* Constructors for use without warp specialization */
-cudaDMASequential&ltfalse/*not specialized*/,ALIGNMENT,XFER_SIZE,TOTAL_THREADS&gt
+cudaDMASequential&ltfalse/*not specialized*/,ALIGNMENT,
+                  XFER_SIZE,TOTAL_THREADS&gt
   ();
 
 cudaDMASequential&ltfalse,ALIGNMENT,XFER_SIZE&gt

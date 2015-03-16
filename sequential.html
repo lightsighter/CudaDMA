@@ -80,8 +80,8 @@ CudaDMASequential&lttrue, ALIGNMENT, BYTES_PER_THREAD&gt
 
 /****************************************************/
 /* Constructors for use without warp-specialization */
-CudaDMASequential&ltfalse/*not specialized*/, ALIGNMENT, BYTES_PER_THREAD, 
-                  XFER_SIZE, DMA_THREADS&gt
+CudaDMASequential&ltfalse/*not specialized*/, ALIGNMENT, 
+                  BYTES_PER_THREAD, XFER_SIZE, DMA_THREADS&gt
   (dma_threadIdx_start/*optional*/);
 
 CudaDMASequential&ltfalse, ALIGNMENT, BYTES_PER_THREAD, XFER_SIZE&gt
